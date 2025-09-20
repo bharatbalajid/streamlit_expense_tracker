@@ -20,79 +20,171 @@ except Exception:
     HAS_REPORTLAB = False
 
 # --------------------------
-# Helpers: Mongo collection and creds
+# Page config
 # --------------------------
-def get_collection():
-    mongo = st.secrets.get("mongo", {}) if isinstance(st.secrets, dict) else st.secrets.get("mongo", {})
-    MONGO_URI = mongo.get("uri")
-    DB_NAME = mongo.get("db", "expense_tracker")
-    COLLECTION_NAME = mongo.get("collection", "expenses")
-
-    if not MONGO_URI:
-        st.error("❌ MongoDB URI not found in .streamlit/secrets.toml (key: [mongo] uri). Add it or export MONGO_URI env var.")
-        st.stop()
-
-    client = MongoClient(MONGO_URI)
-    return client[DB_NAME][COLLECTION_NAME]
-
-def get_credentials():
-    # You can put real usernames/passwords in secrets.toml under [credentials]
-    # Example:
-    # [credentials]
-    # admin = "adminpass"
-    # balaji = "balajipass"
-    # iyyappa = "iyyappapass"
-    creds_from_secrets = st.secrets.get("credentials", {}) if isinstance(st.secrets, dict) else st.secrets.get("credentials", {})
-    # Normalize keys to lowercase
-    creds = {k.lower(): v for k, v in creds_from_secrets.items()}
-    # sensible defaults if none provided
-    if not creds:
-        creds = {
-            "admin": "admin123",
-            "balaji": "balaji123",
-            "iyyappa": "iyyappa123",
-            "gokul": "gokul123"
-        }
-    return creds
+st.set_page_config(page_title="💰 Expense Tracker", layout="wide", initial_sidebar_state="collapsed")
 
 # --------------------------
-# PDF builder (ReportLab platypus) or CSV fallback
+# MongoDB Connection (via Streamlit Secrets)
 # --------------------------
-def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
-    """
-    Returns PDF bytes. If ReportLab not available this will raise.
-    """
+MONGO_URI = st.secrets.get("mongo", {}).get("uri")
+DB_NAME = st.secrets.get("mongo", {}).get("db", "expense_tracker")
+COLLECTION_NAME = st.secrets.get("mongo", {}).get("collection", "expenses")
+
+if not MONGO_URI:
+    st.error("MongoDB URI not configured in .streamlit/secrets.toml")
+    st.stop()
+
+client = MongoClient(MONGO_URI)
+db = client[DB_NAME]
+collection = db[COLLECTION_NAME]
+
+# --------------------------
+# Session defaults
+# --------------------------
+defaults = {
+    "authenticated": False,
+    "username": None,
+    "is_admin": False,
+    "_login_error": None,
+    "__login_user": "",
+    "__login_pwd": "",
+    "date_from": None,
+    "date_to": None
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# --------------------------
+# CSS
+# --------------------------
+LOGIN_LOCK_CSS = """
+<style>
+html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockContainer"] {
+  height: 100vh !important;
+  overflow: hidden !important;
+}
+[data-testid="stAppViewContainer"] > main {
+  min-height: 100vh !important;
+  height: 100vh !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+}
+header, footer, [data-testid="stSidebarNav"], [data-testid="stToolbar"] {
+  display: none !important;
+}
+.login-card {
+  width: 420px;
+  max-width: calc(100% - 40px);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  border-radius: 14px;
+  padding: 30px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  color: #eaf0f6;
+}
+.login-title { font-size:22px; font-weight:800; margin-bottom:6px; color:#fff; }
+.login-sub { color:#9aa3ad; margin-bottom:18px; }
+.stTextInput>div>div>input, .stPassword>div>div>input {
+  background: #14161a !important;
+  color: #e6eef3 !important;
+  border-radius: 10px;
+  padding: 12px 14px;
+  height: 46px;
+  border: 1px solid rgba(255,255,255,0.02);
+}
+.stButton > button {
+  width: 100% !important;
+  padding: 12px !important;
+  border-radius: 10px !important;
+  background: linear-gradient(90deg,#2b7cff,#2ec4b6) !important;
+  color: white !important;
+  font-weight: 700 !important;
+  border: none !important;
+  margin-top: 12px;
+}
+</style>
+"""
+RESTORE_SCROLL_CSS = """
+<style>
+html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockContainer"] {
+  overflow: auto !important;
+  height: auto !important;
+}
+</style>
+"""
+
+# --------------------------
+# Authentication
+# --------------------------
+def login_callback():
+    user = st.session_state.get("__login_user", "").strip()
+    pwd = st.session_state.get("__login_pwd", "")
+    secret_user = st.secrets.get("admin", {}).get("username")
+    secret_pass = st.secrets.get("admin", {}).get("password")
+
+    if not secret_user or not secret_pass:
+        st.session_state["_login_error"] = "Admin credentials not configured."
+        return
+
+    if user == secret_user and pwd == secret_pass:
+        st.session_state["authenticated"] = True
+        st.session_state["username"] = user
+        st.session_state["is_admin"] = True
+        st.session_state["_login_error"] = None
+    else:
+        st.session_state["_login_error"] = "Invalid username or password."
+
+def logout_callback():
+    for k in ["authenticated", "username", "is_admin"]:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.session_state["_login_error"] = None
+
+def show_login():
+    st.markdown(LOGIN_LOCK_CSS, unsafe_allow_html=True)
+    st.markdown('<div class="login-card">', unsafe_allow_html=True)
+    st.markdown('<div class="login-title">💰 Expense Tracker</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-sub">Please sign in to continue</div>', unsafe_allow_html=True)
+
+    st.text_input("Username", key="__login_user", placeholder="admin")
+    st.text_input("Password", type="password", key="__login_pwd", placeholder="••••••••")
+
+    if st.session_state.get("_login_error"):
+        st.error(st.session_state["_login_error"])
+
+    st.button("Sign in", on_click=login_callback)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# --------------------------
+# PDF export
+# --------------------------
+def generate_pdf_bytes(df: pd.DataFrame, title="Expense Report") -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     styles = getSampleStyleSheet()
-    elems = []
-    elems.append(Paragraph(title, styles["Title"]))
-    elems.append(Spacer(1, 12))
+    elems = [Paragraph(title, styles["Title"]), Spacer(1,12)]
     total = df["amount"].sum()
-    summary_text = f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    elems.append(Paragraph(summary_text, styles["Normal"]))
-    elems.append(Spacer(1, 12))
+    elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
+    elems.append(Spacer(1,12))
 
     df_export = df.copy()
     if "timestamp" in df_export.columns:
         df_export["timestamp"] = df_export["timestamp"].astype(str)
-
-    cols = [c for c in ["timestamp", "date", "category", "friend", "amount", "notes"] if c in df_export.columns]
-    table_data = [cols]
-    for _, r in df_export.iterrows():
-        row = [str(r.get(c, "")) for c in cols]
-        table_data.append(row)
+    cols = [c for c in ["timestamp","category","friend","amount","notes"] if c in df_export.columns]
+    table_data = [cols] + [[str(r.get(c,"")) for c in cols] for _, r in df_export.iterrows()]
 
     tbl = Table(table_data, repeatRows=1)
-    tbl_style = TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b2b2b")),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("FONTNAME", (0,0), (-1, -1), "Helvetica"),
-        ("FONTSIZE", (0,0), (-1,-1), 8),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-    ])
-    tbl.setStyle(tbl_style)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#2b2b2b")),
+        ("TEXTCOLOR",(0,0),(-1,0), colors.white),
+        ("GRID",(0,0),(-1,-1),0.5,colors.grey),
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
+        ("FONTSIZE",(0,0),(-1,-1),8),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE")
+    ]))
     elems.append(tbl)
     doc.build(elems)
     pdf_bytes = buffer.getvalue()
@@ -100,55 +192,48 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# Login UI (sidebar)
+# Filter UI
 # --------------------------
-def login_ui():
-    creds = get_credentials()
-    st.sidebar.title("🔐 Login")
+def filter_ui():
+    today = date.today()
+    if st.session_state["date_from"] is None:
+        st.session_state["date_from"] = date(today.year, today.month, 1)
+    if st.session_state["date_to"] is None:
+        st.session_state["date_to"] = today
 
-    # Pre-fill from session state if present
-    default_user = st.session_state.get("login_username", "")
-    default_pass = ""
-
-    username = st.sidebar.text_input("Username", value=default_user, key="login_username")
-    password = st.sidebar.text_input("Password", value=default_pass, type="password", key="login_password")
-    login_clicked = st.sidebar.button("Login")
-
-    if login_clicked:
-        uname = (username or "").strip().lower()
-        if uname and uname in creds and creds[uname] == password:
-            st.session_state["user"] = uname
-            st.sidebar.success(f"✅ Logged in as {uname}")
-        else:
-            st.sidebar.error("❌ Invalid username or password")
-
-    # Show logged in user & logout
-    if st.session_state.get("user"):
-        st.sidebar.markdown(f"**User:** {st.session_state['user']}")
-        if st.sidebar.button("Logout"):
-            for k in ("user", "login_username", "login_password"):
-                if k in st.session_state:
-                    del st.session_state[k]
-            st.sidebar.success("Logged out")
+    col1, col2 = st.columns(2)
+    with col1:
+        date_from = st.date_input("From", value=st.session_state["date_from"], key="date_from")
+    with col2:
+        date_to = st.date_input("To", value=st.session_state["date_to"], key="date_to")
+    st.session_state["date_from"] = date_from
+    st.session_state["date_to"] = date_to
+    return date_from, date_to
 
 # --------------------------
-# Expense Form
+# Main App
 # --------------------------
-def expense_form(collection):
+def show_app():
+    st.markdown(RESTORE_SCROLL_CSS, unsafe_allow_html=True)
+    st.title("💰 Personal Expense Tracker")
+
+    with st.sidebar:
+        st.header("🔒 Account")
+        st.write(f"User: **{st.session_state.get('username','-')}**")
+        if st.session_state.get("is_admin"):
+            st.success("Admin")
+        st.button("Logout", on_click=logout_callback)
+
+    # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
-    grocery_subcategories = [
-        "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains",
-        "Lentils & Pulses", "Spices & Masalas", "Oil & Ghee",
-        "Snacks & Packaged Items", "Bakery & Beverages",
-        "Medical & Household Essentials"
-    ]
-    # Use readable names but the usernames are lower-case in session state
-    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
+    grocery_subcategories = ["Vegetables","Fruits","Milk & Dairy","Rice & Grains",
+                             "Lentils & Pulses","Spices & Masalas","Oil & Ghee",
+                             "Snacks & Packaged Items","Bakery & Beverages",
+                             "Medical & Household Essentials"]
+    friends = ["Iyyappa","Gokul","Balaji","Magesh","Others"]
 
-    st.subheader("➕ Add Expense")
     with st.form("expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
-
         with col1:
             category = st.selectbox("Expense Type", categories)
             if category == "Groceries":
@@ -158,170 +243,92 @@ def expense_form(collection):
                 category_comment = st.text_input("Enter custom category")
                 if category_comment.strip():
                     category = category_comment
-
         with col2:
-            # pre-select friend based on logged in user if possible
-            current_user = st.session_state.get("user", "")
-            # capitalise first letter for display match if possible
-            default_friend = None
-            if current_user:
-                # try to match a friend name ignoring case
-                for f in friends:
-                    if f.lower() == current_user:
-                        default_friend = f
-                        break
-            friend = st.selectbox("Who Spent?", friends, index=friends.index(default_friend) if default_friend else 0)
+            friend = st.selectbox("Who Spent?", friends)
             if friend == "Others":
                 friend_comment = st.text_input("Enter custom friend name")
                 if friend_comment.strip():
                     friend = friend_comment
-
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
         notes = st.text_area("Comments / Notes (optional)")
-
         submitted = st.form_submit_button("💾 Save Expense")
         if submitted:
-            doc = {
+            collection.insert_one({
                 "category": category,
                 "friend": friend,
                 "amount": float(amount),
                 "notes": notes,
-                "timestamp": datetime.now(),
-                "added_by": st.session_state.get("user", "")
-            }
-            collection.insert_one(doc)
+                "timestamp": datetime.now()
+            })
             st.success("✅ Expense saved successfully!")
 
-# --------------------------
-# Filter UI (optional)
-# --------------------------
-def filter_ui():
-    today = date.today()
-    default_from = date(today.year, today.month, 1)
-    col1, col2 = st.columns(2)
-    with col1:
-        date_from = st.date_input("From", value=st.session_state.get("date_from", default_from), key="date_from")
-    with col2:
-        date_to = st.date_input("To", value=st.session_state.get("date_to", today), key="date_to")
-    st.session_state["date_from"] = date_from
-    st.session_state["date_to"] = date_to
-    return date_from, date_to
-
-# --------------------------
-# Analytics & Transactions
-# --------------------------
-def show_analytics(df: pd.DataFrame):
-    st.subheader("📊 Expense Summary")
-    total_spent = df["amount"].sum()
-    st.metric("Total Spent", f"₹{total_spent:,.2f}")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 💡 By Category")
-        cat_summary = df.groupby("category")["amount"].sum().reset_index()
-        fig_cat = px.bar(cat_summary, x="category", y="amount", text="amount", title="Expenses by Category")
-        st.plotly_chart(fig_cat, use_container_width=True)
-    with col2:
-        st.markdown("### 👥 By Friend")
-        friend_summary = df.groupby("friend")["amount"].sum().reset_index()
-        fig_friend = px.pie(friend_summary, names="friend", values="amount", title="Expenses by Friend")
-        st.plotly_chart(fig_friend, use_container_width=True)
-
-def show_transactions(df: pd.DataFrame, collection):
-    st.markdown("### 📝 Transactions")
-    # allowed deleters (lowercase usernames)
-    allowed = {"admin", "balaji", "iyyappa"}
-    current_user = st.session_state.get("user", "").lower()
-
-    # show each row as expander
-    for _, row in df.sort_values(by="date", ascending=False).iterrows():
-        id_str = str(row["_id"])
-        with st.expander(f"📌 {row['date']} - {row['category']} - ₹{row['amount']} (by {row['friend']})"):
-            st.write(f"**Category:** {row['category']}")
-            st.write(f"**Friend:** {row['friend']}")
-            st.write(f"**Amount:** ₹{row['amount']}")
-            st.write(f"**Notes:** {row['notes'] if row['notes'] else '-'}")
-            st.write(f"**Added by:** {row.get('added_by', '-')}")
-            # Delete allowed for certain logged-in users
-            if current_user in allowed:
-                if st.button("❌ Delete", key=f"del-{id_str}"):
-                    try:
-                        collection.delete_one({"_id": ObjectId(id_str)})
-                        st.success("✅ Expense deleted")
-                        # no experimental_rerun(); Streamlit will rerun after this button click automatically
-                    except Exception as e:
-                        st.error(f"Failed to delete: {e}")
-
-# --------------------------
-# Export options
-# --------------------------
-def export_downloads(df: pd.DataFrame):
-    st.markdown("### ⤓ Export")
-    col1, col2 = st.columns(2)
-
-    # CSV download
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    col1.download_button("⬇️ Download CSV", data=csv_bytes, file_name="expenses.csv", mime="text/csv")
-
-    # PDF download (ReportLab)
-    if HAS_REPORTLAB:
-        try:
-            pdf_bytes = generate_pdf_bytes(df, title="Expense Report")
-            col2.download_button("⬇️ Download PDF", data=pdf_bytes, file_name="expenses.pdf", mime="application/pdf")
-        except Exception as e:
-            col2.error(f"PDF export failed: {e} (reportlab ok?)")
-    else:
-        col2.info("PDF export requires reportlab. Install with `pip install reportlab`")
-
-# --------------------------
-# Main function
-# --------------------------
-def main():
-    st.set_page_config(page_title="💰 Expense Tracker", page_icon="📊", layout="wide")
-    st.title("💰 Expense Tracker")
-
-    # Login UI (sidebar)
-    login_ui()
-    if "user" not in st.session_state:
-        st.info("Please log in from the sidebar to continue.")
-        return
-
-    # DB collection
-    collection = get_collection()
-
-    # Expense entry form
-    expense_form(collection)
-
-    # Date filter
+    # Filter by date
     date_from, date_to = filter_ui()
+    data = list(collection.find({"timestamp": {"$gte": datetime.combine(date_from, datetime.min.time()),
+                                               "$lte": datetime.combine(date_to, datetime.max.time())}}))
+    if data:
+        df = pd.DataFrame(data)
+        df["_id"] = df["_id"].astype(str)
 
-    # Load data and filter by date range
-    raw = list(collection.find())
-    if not raw:
-        st.info("No expenses recorded yet. Add one above! 🚀")
-        return
+        st.subheader("📊 All Expenses (Manage)")
+        delete_ids = []
+        for i, row in df.iterrows():
+            c1,c2,c3,c4,c5,c6 = st.columns([2,2,2,2,2,1])
+            with c1: st.write(row.get("timestamp"))
+            with c2: st.write(row.get("category"))
+            with c3: st.write(row.get("friend"))
+            with c4: st.write(f"₹ {row.get('amount')}")
+            with c5: st.write(row.get("notes") or "-")
+            with c6:
+                if st.checkbox("❌", key=row["_id"]):
+                    delete_ids.append(row["_id"])
 
-    df = pd.DataFrame(raw)
-    # Keep id as string for UI keys; original _id present for deletion if needed
-    df["_id"] = df["_id"].astype(str)
-    # Ensure timestamp field exists and convert
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        if delete_ids and st.button("🗑️ Delete Selected"):
+            for del_id in delete_ids:
+                collection.delete_one({"_id": ObjectId(del_id)})
+            st.experimental_rerun()
+
+        if st.session_state.get("is_admin"):
+            st.markdown("---")
+            st.subheader("⚙️ Admin Controls")
+            if st.button("🔥 Delete All Expenses (Admin)"):
+                collection.delete_many({})
+                st.warning("⚠️ All expenses deleted by admin.")
+            if HAS_REPORTLAB:
+                pdf_bytes = generate_pdf_bytes(df, title="Expense Report")
+                st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes,
+                                   file_name="expenses_report.pdf", mime="application/pdf")
+            else:
+                st.error("PDF export requires 'reportlab' in requirements.txt.")
+
+        st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}")
+
+        cat_summary = df.groupby("category")["amount"].sum().reset_index()
+        friend_summary = df.groupby("friend")["amount"].sum().reset_index()
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📌 Spending by Category")
+            st.plotly_chart(px.bar(cat_summary, x="category", y="amount",
+                                   text="amount", color="category"), use_container_width=True)
+        with c2:
+            st.subheader("👥 Spending by Friend")
+            st.plotly_chart(px.bar(friend_summary, x="friend", y="amount",
+                                   text="amount", color="friend"), use_container_width=True)
+
+        st.subheader("🥧 Category Breakdown")
+        st.plotly_chart(px.pie(cat_summary, names="category", values="amount",
+                               title="Expenses by Category"), use_container_width=True)
+
+        st.subheader("Summary by Friend")
+        st.table(friend_summary.set_index("friend"))
     else:
-        df["timestamp"] = pd.NaT
-    df["date"] = df["timestamp"].dt.date.fillna(date.today())
-    # Filter by selected dates
-    mask = (df["date"] >= date_from) & (df["date"] <= date_to)
-    df = df.loc[mask].reset_index(drop=True)
+        st.info("No expenses yet. Add your first one above.")
 
-    if df.empty:
-        st.info("No expenses in the selected date range.")
-        return
-
-    # Show analytics, transactions, exports
-    show_analytics(df)
-    show_transactions(df, collection)
-    export_downloads(df)
-
-if __name__ == "__main__":
-    main()
+# --------------------------
+# App entry
+# --------------------------
+if not st.session_state.get("authenticated"):
+    show_login()
+else:
+    show_app()
