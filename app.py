@@ -39,12 +39,15 @@ collection = db["expenses"]
 # --------------------------
 # Session defaults
 # --------------------------
-for k, v in {
+defaults = {
     "authenticated": False,
     "username": None,
     "is_admin": False,
     "_login_error": None,
-}.items():
+    "__login_user": "",
+    "__login_pwd": ""
+}
+for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -120,66 +123,62 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockCont
 """
 
 # --------------------------
-# Authentication helpers
+# Authentication helpers (callbacks used with on_click)
 # --------------------------
-def do_login(user: str, pwd: str) -> bool:
+def login_callback():
+    """Read username/password from st.session_state (already updated by widgets)"""
+    user = st.session_state.get("__login_user", "").strip()
+    pwd = st.session_state.get("__login_pwd", "")
     secret_user = st.secrets.get("admin", {}).get("username")
     secret_pass = st.secrets.get("admin", {}).get("password")
+
     if secret_user is None or secret_pass is None:
         st.session_state["_login_error"] = "Admin credentials not configured in .streamlit/secrets.toml"
-        return False
+        return
+
     if user == secret_user and pwd == secret_pass:
         st.session_state["authenticated"] = True
         st.session_state["username"] = user
         st.session_state["is_admin"] = True
         st.session_state["_login_error"] = None
-        return True
-    st.session_state["_login_error"] = "Invalid username or password."
-    return False
+        # no explicit experimental_rerun — Streamlit reruns after on_click
+    else:
+        st.session_state["_login_error"] = "Invalid username or password."
 
-def do_logout():
+def logout_callback():
+    """Clear auth state on logout button press"""
     for k in ["authenticated", "username", "is_admin"]:
         if k in st.session_state:
             del st.session_state[k]
     st.session_state["_login_error"] = None
+    # no explicit rerun required; Streamlit reruns after the button click
 
 # --------------------------
-# Login UI (locked-scroll center)
+# Login UI (locked-scroll center) — uses on_click login_callback
 # --------------------------
 def show_login():
-    # inject CSS that locks scroll and centers the main area
     st.markdown(LOGIN_LOCK_CSS, unsafe_allow_html=True)
 
-    # The main area is flex-centered by CSS; render a card here
+    # render a visible card — because main is flex-centered by CSS it will be centered
     st.markdown('<div class="login-card" role="dialog" aria-label="Login card">', unsafe_allow_html=True)
     st.markdown('<div class="login-title">💰 Expense Tracker</div>', unsafe_allow_html=True)
     st.markdown('<div class="login-sub">Please sign in to continue</div>', unsafe_allow_html=True)
 
-    # Inputs (real Streamlit widgets)
-    username = st.text_input("Username", key="__login_user", placeholder="admin")
-    password = st.text_input("Password", type="password", key="__login_pwd", placeholder="••••••••")
+    # Inputs bound to session_state keys
+    st.text_input("Username", key="__login_user", placeholder="admin")
+    st.text_input("Password", type="password", key="__login_pwd", placeholder="••••••••")
 
-    # show any error
+    # show error if exists
     if st.session_state.get("_login_error"):
         st.error(st.session_state.get("_login_error"))
 
-    # Sign in button
-    if st.button("Sign in"):
-        ok = do_login(username, password)
-        if ok:
-            # If experimental_rerun exists, use it; otherwise just proceed (page will rerun after button click automatically)
-            if hasattr(st, "experimental_rerun"):
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    # If it fails for some reason, continue; the session state change will show main on next render
-                    pass
-            # else do nothing — session_state authenticated=True will show app on next rerender
+    # Single-click login via on_click callback (reads session_state inside callback)
+    st.button("Sign in", on_click=login_callback, key="__login_btn")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # --------------------------
-# PDF generator helper
+# PDF helper
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     buffer = io.BytesIO()
@@ -217,10 +216,10 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# Main app UI (restores scroll)
+# Main app UI (restores scroll) — logout via on_click logout_callback
 # --------------------------
 def show_app():
-    # Restore normal scrolling for the main app
+    # restore scrolling when inside the app
     st.markdown(RESTORE_SCROLL_CSS, unsafe_allow_html=True)
 
     st.title("💰 Personal Expense Tracker")
@@ -230,14 +229,7 @@ def show_app():
         st.write(f"User: **{st.session_state.get('username','-')}**")
         if st.session_state.get("is_admin"):
             st.success("Admin")
-        if st.button("Logout"):
-            do_logout()
-            # guarded rerun
-            if hasattr(st, "experimental_rerun"):
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    pass
+        st.button("Logout", on_click=logout_callback, key="__logout_btn")
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
@@ -260,7 +252,6 @@ def show_app():
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
         notes = st.text_area("Comments / Notes (optional)")
         submitted = st.form_submit_button("💾 Save Expense")
-
         if submitted:
             collection.insert_one({
                 "category": category,
@@ -293,12 +284,8 @@ def show_app():
         if delete_ids and st.button("🗑️ Delete Selected"):
             for del_id in delete_ids:
                 collection.delete_one({"_id": ObjectId(del_id)})
-            # guarded rerun
-            if hasattr(st, "experimental_rerun"):
-                try:
-                    st.experimental_rerun()
-                except Exception:
-                    pass
+            # Streamlit will rerun on interaction
+            pass
 
         if st.session_state.get("is_admin"):
             st.markdown("---")
@@ -314,7 +301,6 @@ def show_app():
 
         st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}")
 
-        # charts
         cat_summary = df.groupby("category")["amount"].sum().reset_index()
         friend_summary = df.groupby("friend")["amount"].sum().reset_index()
 
