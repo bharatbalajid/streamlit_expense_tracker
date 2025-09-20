@@ -111,29 +111,14 @@ def show_login():
     st.markdown(LOGIN_STYLE, unsafe_allow_html=True)
     st.markdown("<div class='login-wrapper'>", unsafe_allow_html=True)
 
-    # Left branding
-    brand_html = """
-      <div class='login-brand'>
-        <div class='brand-logo'>IB</div>
-        <div style='font-weight:700; font-size:18px'>InsideBox</div>
-        <div style='color:#9aa3ad; font-size:13px; max-width:200px'>
-          Welcome back — sign in to continue to your expense dashboard.
-        </div>
-      </div>
-    """
-    st.markdown(brand_html, unsafe_allow_html=True)
-
-    # Right login card
+    # Centered login card only
     st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='login-title'>Welcome back</div>", unsafe_allow_html=True)
-    st.markdown("<div class='login-sub'>Please enter your details</div>", unsafe_allow_html=True)
+    st.markdown("<div class='login-title'>💰 Expense Tracker</div>", unsafe_allow_html=True)
+    st.markdown("<div class='login-sub'>Please sign in to continue</div>", unsafe_allow_html=True)
 
     # Inputs
     st.text_input("Email address", key="__login_email", placeholder="you@example.com")
     st.text_input("Password", type="password", key="__login_pwd")
-
-    # Helper row (only Forgot password link kept)
-    st.markdown("<div class='helper-row'><a class='forgot-link' href='#'>Forgot password</a></div>", unsafe_allow_html=True)
 
     # Login button
     st.button("Sign in", on_click=login_callback_plain, key="__login_btn")
