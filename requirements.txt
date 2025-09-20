@@ -1,4 +1,5 @@
-streamlit 
-pymongo 
-pandas 
+pymongo
+pandas
 plotly
+streamlit
+bson
