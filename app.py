@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
@@ -10,8 +9,13 @@ import io
 # --------------------------
 # MongoDB Connection (via Streamlit Secrets)
 # --------------------------
-MONGO_URI = st.secrets["mongo"]["uri"]
+MONGO_URI = st.secrets.get("mongo", {}).get("uri")
+if not MONGO_URI:
+    st.error("MongoDB URI not configured in .streamlit/secrets.toml")
+    st.stop()
+
 client = MongoClient(MONGO_URI)
+
 db = client["expense_tracker"]
 collection = db["expenses"]
 
@@ -31,40 +35,56 @@ if "is_admin" not in st.session_state:
     st.session_state["is_admin"] = False
 
 # --------------------------
-# Simple login page shown first
+# Simple login page shown first (portable/narrow)
 # --------------------------
 def show_login():
-    st.title("🔐 Login")
-    st.write("Please sign in to continue.")
-    user = st.text_input("Username")
-    pwd = st.text_input("Password", type="password")
+    # center the login box and limit width for mobile/portable feel
+    st.markdown(
+        """
+        <style>
+        .login-box {
+            max-width: 520px;
+            margin: 30px auto;
+            padding: 16px;
+        }
+        @media (max-width: 600px) {
+            .login-box { margin: 10px 12px; padding: 8px; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("Login"):
+    st.markdown("<div class='login-box'>", unsafe_allow_html=True)
+    st.title("🔐 Admin Login")
+    st.write("Sign in to access the expense tracker")
+
+    with st.form("login_form"):
+        user = st.text_input("Username", placeholder="admin")
+        pwd = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+
+        if submitted:
             secret_user = st.secrets.get("admin", {}).get("username")
             secret_pass = st.secrets.get("admin", {}).get("password")
 
-            # Simple username/password check (from secrets)
             if secret_user is None or secret_pass is None:
                 st.error("Admin credentials are not configured in .streamlit/secrets.toml")
                 return
+
             if user == secret_user and pwd == secret_pass:
                 st.session_state["authenticated"] = True
                 st.session_state["username"] = user
                 st.session_state["is_admin"] = True
-                st.success("Login successful — welcome, admin.")
+                st.success("Login successful — redirected to the app")
+                # try to rerun immediately if supported
+                if hasattr(st, "experimental_rerun"):
+                    st.experimental_rerun()
+                return
             else:
-                # If you want to allow non-admin users (no credentials in secrets),
-                # you can define a different path here. For now we only allow admin user.
                 st.error("Invalid credentials")
 
-    with col2:
-        if st.button("Continue as Guest"):
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = "guest"
-            st.session_state["is_admin"] = False
-            st.info("Continuing as guest (no admin controls).")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # --------------------------
 # Main app UI (after login)
@@ -79,13 +99,20 @@ def show_app():
         if st.session_state.get("is_admin"):
             st.success("Admin")
         else:
-            st.info("Guest")
+            st.info("User")
+
         if st.button("Logout"):
             # reset session state for a clean logout
             st.session_state["authenticated"] = False
             st.session_state["username"] = None
             st.session_state["is_admin"] = False
-            st.experimental_rerun() if hasattr(st, "experimental_rerun") else None
+            # attempt immediate rerun if available, otherwise show message
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
+            else:
+                st.experimental_set_query_params() if hasattr(st, "experimental_set_query_params") else None
+                st.success("Logged out — please refresh the page if view does not update")
+                return
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
