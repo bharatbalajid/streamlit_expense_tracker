@@ -1,5 +1,5 @@
-pymongo
-pandas
-plotly
-streamlit
+pymongo==4.4.0
+pandas==2.2.2
+plotly==5.16.1
+streamlit==1.25.0
 bson
