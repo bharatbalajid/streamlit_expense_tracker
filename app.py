@@ -127,7 +127,7 @@ def show_app():
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
-    friends = ["Gokul", "Balaji", "Magesh", "Others"]
+    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
 
     with st.form("expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
