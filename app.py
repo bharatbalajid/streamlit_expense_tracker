@@ -25,7 +25,7 @@ except Exception:
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 
 # --------------------------
-# MongoDB Connection (via Streamlit Secrets)
+# MongoDB Connection
 # --------------------------
 MONGO_URI = st.secrets.get("mongo", {}).get("uri")
 if not MONGO_URI:
@@ -37,120 +37,46 @@ db = client["expense_tracker"]
 collection = db["expenses"]
 
 # --------------------------
-# Session state defaults
+# Session defaults
 # --------------------------
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-if "username" not in st.session_state:
-    st.session_state["username"] = None
-if "is_admin" not in st.session_state:
-    st.session_state["is_admin"] = False
+for k, v in {
+    "authenticated": False,
+    "username": None,
+    "is_admin": False,
+    "_login_error": None,
+    "__login_email": "",
+    "__login_pwd": ""
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # --------------------------
-# Styling for login card (match the sample)
+# Styling
 # --------------------------
 LOGIN_STYLE = """
 <style>
-/* center container */
-[data-testid="stApp"] > div:first-child {
-  display: flex;
-  justify-content: center;
-}
-
-/* outer wrapper */
-.login-wrapper {
-  width: 760px;
-  max-width: calc(100% - 32px);
-  margin: 36px auto;
-  display: flex;
-  gap: 40px;
-  align-items: center;
-  justify-content: center;
-}
-
-/* left brand */
-.login-brand {
-  width: 220px;
-  min-width: 160px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  flex-direction: column;
-  gap: 12px;
-}
-.brand-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
-  background: linear-gradient(135deg,#2b7cff,#2ec4b6);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  color:white;
-  font-weight:700;
-  font-size:20px;
-}
-
-/* card */
-.login-card {
-  background: rgba(255,255,255,0.02);
-  border-radius: 12px;
-  padding: 36px;
-  box-shadow: 0 8px 40px rgba(0,0,0,0.35);
-  display: flex;
-  flex-direction: column;
-  min-width: 360px;
-}
-
-/* headings */
-.login-title { font-size: 28px; font-weight:700; margin-bottom:6px; }
-.login-sub { color:#8f98a3; margin-bottom:18px; }
-
-/* inputs */
-.stTextInput>div>div>input,
-.stTextInput>div>div>textarea {
-  height: 46px;
-  padding: 10px 12px;
-  border-radius: 8px;
-}
-
-/* helper row */
+[data-testid="stApp"] > div:first-child { display:flex; justify-content:center; }
+.login-wrapper { width:760px; max-width:calc(100%-32px); margin:36px auto; display:flex; gap:40px; align-items:center; justify-content:center; }
+.login-brand { width:220px; min-width:160px; display:flex; align-items:flex-start; justify-content:center; flex-direction:column; gap:12px; }
+.brand-logo { width:56px; height:56px; border-radius:8px; background:linear-gradient(135deg,#2b7cff,#2ec4b6); display:flex; align-items:center; justify-content:center; color:white; font-weight:700; font-size:20px; }
+.login-card { background: rgba(255,255,255,0.02); border-radius:12px; padding:36px; box-shadow:0 8px 40px rgba(0,0,0,0.35); display:flex; flex-direction:column; min-width:360px; }
+.login-title { font-size:28px; font-weight:700; margin-bottom:6px; } .login-sub { color:#8f98a3; margin-bottom:18px; }
+.stTextInput>div>div>input, .stTextInput>div>div>textarea { height:46px; padding:10px 12px; border-radius:8px; }
 .helper-row { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:6px; margin-bottom:14px; color:#9aa3ad; font-size:14px; }
-
-/* primary */
-.stButton>button.primary-btn {
-  background: linear-gradient(90deg,#2b7cff,#2ec4b6);
-  color: white;
-  width:100%;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: none;
-  font-weight: 600;
-  box-shadow: 0 6px 18px rgba(46,196,182,0.12);
-}
-.stButton>button.primary-btn:active { transform: translateY(1px); }
-
-/* google button */
-.google-btn { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(150,150,150,0.12); background: transparent; cursor: pointer; }
-.google-logo { width:18px; height:18px; }
-
-/* link */
-.forgot-link { color: #2b7cff; text-decoration: none; font-size:14px; }
-
-/* responsive */
-@media (max-width: 880px) {
-  .login-wrapper { flex-direction: column; gap: 18px; padding: 18px; }
-  .login-brand { order: -1; width:100%; justify-content:flex-start; }
-  .login-card { width:100%; padding:20px; }
-}
+.stButton>button.primary-btn { background: linear-gradient(90deg,#2b7cff,#2ec4b6); color: white; width:100%; padding:12px 14px; border-radius:10px; border:none; font-weight:600; box-shadow:0 6px 18px rgba(46,196,182,0.12); }
+.google-btn { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; padding:10px 12px; border-radius:10px; border:1px solid rgba(150,150,150,0.12); background:transparent; cursor:pointer; }
+.forgot-link { color:#2b7cff; text-decoration:none; font-size:14px; }
+@media (max-width:880px) { .login-wrapper { flex-direction:column; gap:18px; padding:18px; } .login-brand { order:-1; width:100%; justify-content:flex-start; } .login-card { width:100%; padding:20px; } }
 </style>
 """
 
 # --------------------------
-# Callback helpers
+# Callbacks
 # --------------------------
-def login_callback(input_user: str, input_pwd: str):
-    """Sets session state when credentials match secrets; stores errors in session."""
+def login_callback_plain():
+    """Read inputs from session_state and authenticate."""
+    user = st.session_state.get("__login_email", "").strip()
+    pwd = st.session_state.get("__login_pwd", "")
     secret_user = st.secrets.get("admin", {}).get("username")
     secret_pass = st.secrets.get("admin", {}).get("password")
 
@@ -158,41 +84,38 @@ def login_callback(input_user: str, input_pwd: str):
         st.session_state["_login_error"] = "Admin credentials not set in .streamlit/secrets.toml"
         return
 
-    if input_user == secret_user and input_pwd == secret_pass:
+    if user == secret_user and pwd == secret_pass:
         st.session_state["authenticated"] = True
-        st.session_state["username"] = input_user
+        st.session_state["username"] = user
         st.session_state["is_admin"] = True
-        st.session_state.pop("_login_error", None)
-        # attempt immediate rerun to switch view
+        st.session_state["_login_error"] = None
+        # immediate rerun if supported
         if hasattr(st, "experimental_rerun"):
             st.experimental_rerun()
     else:
         st.session_state["_login_error"] = "Invalid credentials"
 
-def logout_callback():
-    """Clears session state and reruns if possible."""
+def logout_callback_plain():
     for k in ["authenticated", "username", "is_admin"]:
         if k in st.session_state:
             del st.session_state[k]
-    st.session_state.pop("_login_error", None)
+    st.session_state.update({"authenticated": False, "username": None, "is_admin": False})
+    st.session_state["_login_error"] = None
     if hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
 # --------------------------
-# Login UI (styled, single-click)
+# Login UI (NO st.form) -> single click
 # --------------------------
 def show_login():
     st.markdown(LOGIN_STYLE, unsafe_allow_html=True)
     st.markdown("<div class='login-wrapper'>", unsafe_allow_html=True)
-
     brand_html = """
-    <div class='login-brand'>
-      <div class='brand-logo'>IB</div>
-      <div style='font-weight:700; font-size:18px'>InsideBox</div>
-      <div style='color:#9aa3ad; font-size:13px; max-width:200px'>
-        Welcome back — sign in to continue to your expense dashboard.
+      <div class='login-brand'>
+        <div class='brand-logo'>IB</div>
+        <div style='font-weight:700; font-size:18px'>InsideBox</div>
+        <div style='color:#9aa3ad; font-size:13px; max-width:200px'>Welcome back — sign in to continue to your expense dashboard.</div>
       </div>
-    </div>
     """
     st.markdown(brand_html, unsafe_allow_html=True)
 
@@ -200,66 +123,54 @@ def show_login():
     st.markdown("<div class='login-title'>Welcome back</div>", unsafe_allow_html=True)
     st.markdown("<div class='login-sub'>Please enter your details</div>", unsafe_allow_html=True)
 
-    # form with keys so callback receives stable values
-    with st.form("login_form_v2"):
-        email = st.text_input("Email address", key="__login_email", placeholder="you@example.com")
-        pwd = st.text_input("Password", type="password", key="__login_pwd")
-        remember = st.checkbox("Remember for 30 days", value=False, key="__login_remember")
+    # Plain inputs bound to session_state keys
+    st.text_input("Email address", key="__login_email", placeholder="you@example.com")
+    st.text_input("Password", type="password", key="__login_pwd")
 
-        cols = st.columns([1,1])
-        with cols[1]:
-            st.markdown("<div style='text-align:right'><a class='forgot-link' href='#'>Forgot password</a></div>", unsafe_allow_html=True)
+    cols = st.columns([1,1])
+    with cols[1]:
+        st.markdown("<div style='text-align:right'><a class='forgot-link' href='#'>Forgot password</a></div>", unsafe_allow_html=True)
 
-        # single-click submit via callback
-        st.form_submit_button("Sign in", on_click=login_callback,
-                              args=(st.session_state.get("__login_email",""), st.session_state.get("__login_pwd","")),
-                              kwargs={},
-                              help="Sign in")
+    # Single-click button (no form)
+    st.button("Sign in", on_click=login_callback_plain, key="__login_btn", )
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    # visual google
+    st.markdown("""
+    <button class='google-btn' onclick="(function(){})()">
+      <img class='google-logo' src='https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' />
+      <span style='font-weight:600; color:#444'>Sign in with Google</span>
+    </button>
+    """, unsafe_allow_html=True)
 
-        # visual Google sign-in button (UI only)
-        st.markdown("""
-        <button class='google-btn' onclick="(function(){})()">
-          <img class='google-logo' src='https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' />
-          <span style='font-weight:600; color:#444'>Sign in with Google</span>
-        </button>
-        """, unsafe_allow_html=True)
-
-    # show login errors stored in session
     if st.session_state.get("_login_error"):
         st.error(st.session_state.get("_login_error"))
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close card
-    st.markdown("</div>", unsafe_allow_html=True)  # close wrapper
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # --------------------------
-# PDF generator
+# PDF generator (same as before)
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     styles = getSampleStyleSheet()
     elems = []
-
     elems.append(Paragraph(title, styles["Title"]))
     elems.append(Spacer(1, 12))
-
     total = df["amount"].sum()
     summary_text = f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     elems.append(Paragraph(summary_text, styles["Normal"]))
     elems.append(Spacer(1, 12))
-
     df_export = df.copy()
     if "timestamp" in df_export.columns:
         df_export["timestamp"] = df_export["timestamp"].astype(str)
-
     cols = [c for c in ["timestamp", "category", "friend", "amount", "notes"] if c in df_export.columns]
     table_data = [cols]
     for _, r in df_export.iterrows():
         row = [str(r.get(c, "")) for c in cols]
         table_data.append(row)
-
     tbl = Table(table_data, repeatRows=1)
     tbl_style = TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b2b2b")),
@@ -271,14 +182,13 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     ])
     tbl.setStyle(tbl_style)
     elems.append(tbl)
-
     doc.build(elems)
     pdf_bytes = buffer.getvalue()
     buffer.close()
     return pdf_bytes
 
 # --------------------------
-# Main app UI (after login)
+# Main app UI
 # --------------------------
 def show_app():
     st.title("💰 Personal Expense Tracker")
@@ -288,7 +198,7 @@ def show_app():
         st.write(f"User: **{st.session_state.get('username','-')}**")
         if st.session_state.get("is_admin"):
             st.success("Admin")
-        st.button("Logout", on_click=logout_callback, key="__logout_btn")
+        st.button("Logout", on_click=logout_callback_plain, key="__logout_btn")
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
@@ -296,46 +206,35 @@ def show_app():
 
     with st.form("expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
-
         with col1:
             category = st.selectbox("Expense Type", categories)
             if category == "Others":
                 category_comment = st.text_input("Enter custom category")
                 if category_comment.strip():
                     category = category_comment
-
         with col2:
             friend = st.selectbox("Who Spent?", friends)
             if friend == "Others":
                 friend_comment = st.text_input("Enter custom friend name")
                 if friend_comment.strip():
                     friend = friend_comment
-
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
         notes = st.text_area("Comments / Notes (optional)")
         submitted = st.form_submit_button("💾 Save Expense")
-
         if submitted:
-            expense = {
-                "category": category,
-                "friend": friend,
-                "amount": float(amount),
-                "notes": notes,
-                "timestamp": datetime.now()
-            }
+            expense = {"category": category, "friend": friend, "amount": float(amount), "notes": notes, "timestamp": datetime.now()}
             collection.insert_one(expense)
             st.success("✅ Expense saved successfully!")
 
-    # Show data and analytics
+    # Show data
     data = list(collection.find())
     if data:
         df = pd.DataFrame(data)
         df["_id"] = df["_id"].astype(str)
-
         st.subheader("📊 All Expenses (Manage)")
         delete_ids = []
         for i, row in df.iterrows():
-            c1, c2, c3, c4, c5, c6 = st.columns([2,2,2,2,2,1])
+            c1,c2,c3,c4,c5,c6 = st.columns([2,2,2,2,2,1])
             with c1: st.write(row.get("timestamp"))
             with c2: st.write(row.get("category"))
             with c3: st.write(row.get("friend"))
@@ -344,14 +243,11 @@ def show_app():
             with c6:
                 if st.checkbox("❌", key=row["_id"]):
                     delete_ids.append(row["_id"])
-
         if delete_ids:
             if st.button("🗑️ Delete Selected"):
                 for del_id in delete_ids:
                     collection.delete_one({"_id": ObjectId(del_id)})
                 st.success(f"Deleted {len(delete_ids)} entries.")
-
-        # Admin-only controls
         if st.session_state.get("is_admin"):
             st.markdown("---")
             st.subheader("⚙️ Admin Controls")
@@ -362,42 +258,36 @@ def show_app():
                     st.warning("⚠️ All expenses deleted by admin.")
             with col_b:
                 if not HAS_REPORTLAB:
-                    st.error("PDF export requires 'reportlab' in requirements.txt. Add it to requirements.txt.")
+                    st.error("PDF export requires 'reportlab' in requirements.txt.")
                 else:
                     df_export = df.copy()
                     pdf_bytes = generate_pdf_bytes(df_export, title="Expense Report")
-                    st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes,
-                                       file_name="expenses_report.pdf", mime="application/pdf")
-
+                    st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
         total = df["amount"].sum()
         st.metric("💵 Total Spending", f"₹ {total:.2f}")
-
         c1, c2 = st.columns(2)
         with c1:
             cat_summary = df.groupby("category")["amount"].sum().reset_index()
             st.subheader("📌 Spending by Category")
             fig1 = px.bar(cat_summary, x="category", y="amount", text="amount", color="category")
             st.plotly_chart(fig1, use_container_width=True)
-
         with c2:
             friend_summary = df.groupby("friend")["amount"].sum().reset_index()
             st.subheader("👥 Spending by Friend")
             fig2 = px.bar(friend_summary, x="friend", y="amount", text="amount", color="friend")
             st.plotly_chart(fig2, use_container_width=True)
-
         st.subheader("🥧 Category Breakdown")
         fig3 = px.pie(cat_summary, names="category", values="amount", title="Expenses by Category")
         st.plotly_chart(fig3, use_container_width=True)
-
         st.subheader("Summary by Friend")
         st.table(friend_summary.set_index("friend"))
     else:
         st.info("No expenses yet. Add your first one above")
 
 # --------------------------
-# App entry
+# Entry point
 # --------------------------
-if not st.session_state["authenticated"]:
+if not st.session_state.get("authenticated"):
     show_login()
 else:
     show_app()
