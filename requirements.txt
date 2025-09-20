@@ -2,4 +2,4 @@ pymongo
 pandas
 plotly
 streamlit
-reportlab
+reportlab==4.1.0
