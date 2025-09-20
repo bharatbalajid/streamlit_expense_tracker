@@ -25,7 +25,7 @@ except Exception:
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide", initial_sidebar_state="collapsed")
 
 # --------------------------
-# MongoDB Connection (use secrets)
+# MongoDB Connection (via Streamlit Secrets)
 # --------------------------
 MONGO_URI = st.secrets.get("mongo", {}).get("uri")
 if not MONGO_URI:
@@ -39,31 +39,27 @@ collection = db["expenses"]
 # --------------------------
 # Session defaults
 # --------------------------
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-if "username" not in st.session_state:
-    st.session_state["username"] = None
-if "is_admin" not in st.session_state:
-    st.session_state["is_admin"] = False
-if "_login_error" not in st.session_state:
-    st.session_state["_login_error"] = None
+for k, v in {
+    "authenticated": False,
+    "username": None,
+    "is_admin": False,
+    "_login_error": None,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # --------------------------
-# STRONG CSS for login page
-# - make Streamlit main container full-viewport
-# - center its contents
-# - hide header/sidebar/footer while on login
-# - lock scrolling
+# CSS: lock scroll on login and center card
 # --------------------------
 LOGIN_LOCK_CSS = """
 <style>
-/* Lock page scrolling and make main container full viewport */
+/* Lock page scrolling and ensure app main area is full height */
 html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockContainer"] {
   height: 100vh !important;
   overflow: hidden !important;
 }
 
-/* Make Streamlit's main area use full height and flex center its children */
+/* Make main area flex center its children */
 [data-testid="stAppViewContainer"] > main {
   min-height: 100vh !important;
   height: 100vh !important;
@@ -73,28 +69,26 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockCont
   padding: 0 !important;
 }
 
-/* Hide header, footer and sidebar during login so nothing shifts the layout */
-[data-testid="stToolbar"], header, footer, [data-testid="stSidebarNav"], .css-1lsmgbg {
+/* Hide header/footer/sidebar on login screen */
+header, footer, [data-testid="stSidebarNav"], [data-testid="stToolbar"] {
   display: none !important;
 }
 
-/* Styling for the login card */
+/* Login card styling */
 .login-card {
   width: 420px;
   max-width: calc(100% - 40px);
-  border-radius: 14px;
-  padding: 32px;
   background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-  box-shadow: 0 14px 40px rgba(0,0,0,0.6);
+  border-radius: 14px;
+  padding: 30px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   color: #eaf0f6;
 }
+.login-title { font-size:22px; font-weight:800; margin-bottom:6px; color:#fff; }
+.login-sub { color:#9aa3ad; margin-bottom:18px; }
 
-/* Title and subtitle */
-.login-title { font-size: 22px; font-weight: 800; margin-bottom: 6px; color: #fff; }
-.login-sub { color: #9aa3ad; margin-bottom: 18px; }
-
-/* Inputs */
-.stTextInput>div>div>input, .stTextInput>div>div>textarea, .stPassword>div>div>input {
+/* Inputs and button look */
+.stTextInput>div>div>input, .stPassword>div>div>input {
   background: #14161a !important;
   color: #e6eef3 !important;
   border-radius: 10px;
@@ -102,33 +96,20 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockCont
   height: 46px;
   border: 1px solid rgba(255,255,255,0.02);
 }
-
-/* Full-width primary button */
 .stButton > button {
   width: 100% !important;
   padding: 12px !important;
   border-radius: 10px !important;
   background: linear-gradient(90deg,#2b7cff,#2ec4b6) !important;
   color: white !important;
-  border: none !important;
   font-weight: 700 !important;
-  box-shadow: 0 8px 30px rgba(46,196,182,0.12);
-}
-
-/* make sure small spacing is consistent */
-.login-gap { height: 12px; }
-
-/* Responsive shrink */
-@media (max-width: 520px) {
-  .login-card { width: calc(100% - 20px); padding: 20px; }
-  .login-title { font-size: 20px; }
+  border: none !important;
+  margin-top: 12px;
 }
 </style>
 """
 
-# --------------------------
-# Restore scrolling CSS (to use after login)
-# --------------------------
+# CSS to restore normal scrolling after login
 RESTORE_SCROLL_CSS = """
 <style>
 html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockContainer"] {
@@ -153,7 +134,7 @@ def do_login(user: str, pwd: str) -> bool:
         st.session_state["is_admin"] = True
         st.session_state["_login_error"] = None
         return True
-    st.session_state["_login_error"] = "Invalid username or password"
+    st.session_state["_login_error"] = "Invalid username or password."
     return False
 
 def do_logout():
@@ -163,37 +144,42 @@ def do_logout():
     st.session_state["_login_error"] = None
 
 # --------------------------
-# Login UI (centered and scroll locked)
+# Login UI (locked-scroll center)
 # --------------------------
 def show_login():
-    # inject CSS that locks scroll and centers main container
+    # inject CSS that locks scroll and centers the main area
     st.markdown(LOGIN_LOCK_CSS, unsafe_allow_html=True)
 
-    # Render card in the main area; because main is flex-centered by CSS, this will sit center of viewport
+    # The main area is flex-centered by CSS; render a card here
     st.markdown('<div class="login-card" role="dialog" aria-label="Login card">', unsafe_allow_html=True)
-
     st.markdown('<div class="login-title">💰 Expense Tracker</div>', unsafe_allow_html=True)
     st.markdown('<div class="login-sub">Please sign in to continue</div>', unsafe_allow_html=True)
 
-    # Show inputs (real Streamlit widgets) - they appear inside the card div visually
+    # Inputs (real Streamlit widgets)
     username = st.text_input("Username", key="__login_user", placeholder="admin")
-    st.markdown('<div class="login-gap"></div>', unsafe_allow_html=True)
     password = st.text_input("Password", type="password", key="__login_pwd", placeholder="••••••••")
 
-    # error message
+    # show any error
     if st.session_state.get("_login_error"):
         st.error(st.session_state.get("_login_error"))
 
-    st.markdown('<div class="login-gap"></div>', unsafe_allow_html=True)
+    # Sign in button
     if st.button("Sign in"):
-        if do_login(username, password):
-            # login success -> trigger rerun so show_app can restore scrolling
-            st.experimental_rerun()
+        ok = do_login(username, password)
+        if ok:
+            # If experimental_rerun exists, use it; otherwise just proceed (page will rerun after button click automatically)
+            if hasattr(st, "experimental_rerun"):
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    # If it fails for some reason, continue; the session state change will show main on next render
+                    pass
+            # else do nothing — session_state authenticated=True will show app on next rerender
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # --------------------------
-# PDF generator (same as before)
+# PDF generator helper
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     buffer = io.BytesIO()
@@ -231,10 +217,10 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# Main app UI (restores scrolling)
+# Main app UI (restores scroll)
 # --------------------------
 def show_app():
-    # Restore scrolling and show app normally
+    # Restore normal scrolling for the main app
     st.markdown(RESTORE_SCROLL_CSS, unsafe_allow_html=True)
 
     st.title("💰 Personal Expense Tracker")
@@ -246,7 +232,12 @@ def show_app():
             st.success("Admin")
         if st.button("Logout"):
             do_logout()
-            st.experimental_rerun()
+            # guarded rerun
+            if hasattr(st, "experimental_rerun"):
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
@@ -269,6 +260,7 @@ def show_app():
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
         notes = st.text_area("Comments / Notes (optional)")
         submitted = st.form_submit_button("💾 Save Expense")
+
         if submitted:
             collection.insert_one({
                 "category": category,
@@ -279,7 +271,7 @@ def show_app():
             })
             st.success("✅ Expense saved successfully!")
 
-    # Data display
+    # Show data & analytics
     data = list(collection.find())
     if data:
         df = pd.DataFrame(data)
@@ -301,7 +293,12 @@ def show_app():
         if delete_ids and st.button("🗑️ Delete Selected"):
             for del_id in delete_ids:
                 collection.delete_one({"_id": ObjectId(del_id)})
-            st.experimental_rerun()
+            # guarded rerun
+            if hasattr(st, "experimental_rerun"):
+                try:
+                    st.experimental_rerun()
+                except Exception:
+                    pass
 
         if st.session_state.get("is_admin"):
             st.markdown("---")
@@ -317,19 +314,23 @@ def show_app():
 
         st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}")
 
+        # charts
+        cat_summary = df.groupby("category")["amount"].sum().reset_index()
+        friend_summary = df.groupby("friend")["amount"].sum().reset_index()
+
         c1, c2 = st.columns(2)
         with c1:
-            cat_summary = df.groupby("category")["amount"].sum().reset_index()
             st.subheader("📌 Spending by Category")
             st.plotly_chart(px.bar(cat_summary, x="category", y="amount", text="amount", color="category"), use_container_width=True)
         with c2:
-            friend_summary = df.groupby("friend")["amount"].sum().reset_index()
             st.subheader("👥 Spending by Friend")
             st.plotly_chart(px.bar(friend_summary, x="friend", y="amount", text="amount", color="friend"), use_container_width=True)
 
         st.subheader("🥧 Category Breakdown")
         st.plotly_chart(px.pie(cat_summary, names="category", values="amount", title="Expenses by Category"), use_container_width=True)
 
+        st.subheader("Summary by Friend")
+        st.table(friend_summary.set_index("friend"))
     else:
         st.info("No expenses yet. Add your first one above")
 
