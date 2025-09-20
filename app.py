@@ -110,44 +110,40 @@ def logout_callback_plain():
 def show_login():
     st.markdown(LOGIN_STYLE, unsafe_allow_html=True)
     st.markdown("<div class='login-wrapper'>", unsafe_allow_html=True)
+
+    # Left branding
     brand_html = """
       <div class='login-brand'>
         <div class='brand-logo'>IB</div>
         <div style='font-weight:700; font-size:18px'>InsideBox</div>
-        <div style='color:#9aa3ad; font-size:13px; max-width:200px'>Welcome back — sign in to continue to your expense dashboard.</div>
+        <div style='color:#9aa3ad; font-size:13px; max-width:200px'>
+          Welcome back — sign in to continue to your expense dashboard.
+        </div>
       </div>
     """
     st.markdown(brand_html, unsafe_allow_html=True)
 
+    # Right login card
     st.markdown("<div class='login-card'>", unsafe_allow_html=True)
     st.markdown("<div class='login-title'>Welcome back</div>", unsafe_allow_html=True)
     st.markdown("<div class='login-sub'>Please enter your details</div>", unsafe_allow_html=True)
 
-    # Plain inputs bound to session_state keys
+    # Inputs
     st.text_input("Email address", key="__login_email", placeholder="you@example.com")
     st.text_input("Password", type="password", key="__login_pwd")
 
-    cols = st.columns([1,1])
-    with cols[1]:
-        st.markdown("<div style='text-align:right'><a class='forgot-link' href='#'>Forgot password</a></div>", unsafe_allow_html=True)
+    # Helper row (only Forgot password link kept)
+    st.markdown("<div class='helper-row'><a class='forgot-link' href='#'>Forgot password</a></div>", unsafe_allow_html=True)
 
-    # Single-click button (no form)
-    st.button("Sign in", on_click=login_callback_plain, key="__login_btn", )
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    # Login button
+    st.button("Sign in", on_click=login_callback_plain, key="__login_btn")
 
-    # visual google
-    st.markdown("""
-    <button class='google-btn' onclick="(function(){})()">
-      <img class='google-logo' src='https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' />
-      <span style='font-weight:600; color:#444'>Sign in with Google</span>
-    </button>
-    """, unsafe_allow_html=True)
-
+    # Error message if login failed
     if st.session_state.get("_login_error"):
         st.error(st.session_state.get("_login_error"))
 
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)  # close login-card
+    st.markdown("</div>", unsafe_allow_html=True)  # close wrapper
 
 # --------------------------
 # PDF generator (same as before)
