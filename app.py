@@ -6,6 +6,16 @@ import plotly.express as px
 from bson.objectid import ObjectId
 import io
 
+# PDF generation
+try:
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+except Exception:
+    # reportlab not installed; PDF export button will warn
+    reportlab = None
+
 # --------------------------
 # MongoDB Connection (via Streamlit Secrets)
 # --------------------------
@@ -103,6 +113,56 @@ def show_login():
     st.markdown("</div>", unsafe_allow_html=True)
 
 # --------------------------
+# PDF helper
+# --------------------------
+
+def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
+    """Create a simple PDF with a title, summary, and a table of expenses."""
+    buffer = io.BytesIO()
+    # Use landscape A4 if table is wide
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    styles = getSampleStyleSheet()
+    elems = []
+
+    elems.append(Paragraph(title, styles["Title"]))
+    elems.append(Spacer(1, 12))
+
+    # Add a small summary
+    total = df["amount"].sum()
+    summary_text = f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    elems.append(Paragraph(summary_text, styles["Normal"]))
+    elems.append(Spacer(1, 12))
+
+    # Prepare table data
+    df_export = df.copy()
+    if "timestamp" in df_export.columns:
+        df_export["timestamp"] = df_export["timestamp"].astype(str)
+    # ensure columns order
+    cols = [c for c in ["timestamp", "category", "friend", "amount", "notes"] if c in df_export.columns]
+    table_data = [cols]
+    for _, r in df_export.iterrows():
+        row = [str(r.get(c, "")) for c in cols]
+        table_data.append(row)
+
+    # Create the table
+    tbl = Table(table_data, repeatRows=1)
+    tbl_style = TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b2b2b")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ("FONTNAME", (0,0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0,0), (-1,-1), 8),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+    ])
+    tbl.setStyle(tbl_style)
+    elems.append(tbl)
+
+    doc.build(elems)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
+
+# --------------------------
 # Main app UI
 # --------------------------
 def show_app():
@@ -196,13 +256,14 @@ def show_app():
                     collection.delete_many({})
                     st.warning("⚠️ All expenses deleted by admin.")
             with col_b:
-                csv_buffer = io.StringIO()
-                df_export = df.copy()
-                df_export["timestamp"] = df_export["timestamp"].astype(str)
-                df_export.to_csv(csv_buffer, index=False)
-                csv_bytes = csv_buffer.getvalue().encode("utf-8")
-                st.download_button("⬇️ Download CSV (Admin)", data=csv_bytes,
-                                   file_name="expenses_export.csv", mime="text/csv")
+                # Export PDF instead of CSV
+                if reportlab is None:
+                    st.error("PDF export requires 'reportlab' in requirements.txt. Ask to update requirements.")
+                else:
+                    df_export = df.copy()
+                    pdf_bytes = generate_pdf_bytes(df_export, title="Expense Report")
+                    st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes,
+                                       file_name="expenses_report.pdf", mime="application/pdf")
 
         total = df["amount"].sum()
         st.metric("💵 Total Spending", f"₹ {total:.2f}")
