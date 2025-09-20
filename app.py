@@ -55,18 +55,48 @@ for k, v in {
 # --------------------------
 LOGIN_STYLE = """
 <style>
-[data-testid="stApp"] > div:first-child { display:flex; justify-content:center; }
-.login-wrapper { width:760px; max-width:calc(100%-32px); margin:36px auto; display:flex; gap:40px; align-items:center; justify-content:center; }
-.login-brand { width:220px; min-width:160px; display:flex; align-items:flex-start; justify-content:center; flex-direction:column; gap:12px; }
-.brand-logo { width:56px; height:56px; border-radius:8px; background:linear-gradient(135deg,#2b7cff,#2ec4b6); display:flex; align-items:center; justify-content:center; color:white; font-weight:700; font-size:20px; }
-.login-card { background: rgba(255,255,255,0.02); border-radius:12px; padding:36px; box-shadow:0 8px 40px rgba(0,0,0,0.35); display:flex; flex-direction:column; min-width:360px; }
-.login-title { font-size:28px; font-weight:700; margin-bottom:6px; } .login-sub { color:#8f98a3; margin-bottom:18px; }
-.stTextInput>div>div>input, .stTextInput>div>div>textarea { height:46px; padding:10px 12px; border-radius:8px; }
-.helper-row { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:6px; margin-bottom:14px; color:#9aa3ad; font-size:14px; }
-.stButton>button.primary-btn { background: linear-gradient(90deg,#2b7cff,#2ec4b6); color: white; width:100%; padding:12px 14px; border-radius:10px; border:none; font-weight:600; box-shadow:0 6px 18px rgba(46,196,182,0.12); }
-.google-btn { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; padding:10px 12px; border-radius:10px; border:1px solid rgba(150,150,150,0.12); background:transparent; cursor:pointer; }
-.forgot-link { color:#2b7cff; text-decoration:none; font-size:14px; }
-@media (max-width:880px) { .login-wrapper { flex-direction:column; gap:18px; padding:18px; } .login-brand { order:-1; width:100%; justify-content:flex-start; } .login-card { width:100%; padding:20px; } }
+/* Center the login wrapper without touching stApp root */
+.login-wrapper {
+  width: 420px;
+  max-width: calc(100% - 32px);
+  margin: 60px auto;
+  display: flex;
+  justify-content: center;
+}
+.login-card {
+  background: rgba(255,255,255,0.02);
+  border-radius: 12px;
+  padding: 32px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.login-title {
+  font-size: 26px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  text-align: center;
+}
+.login-sub {
+  color: #8f98a3;
+  margin-bottom: 18px;
+  text-align: center;
+}
+.stTextInput>div>div>input {
+  height: 44px;
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+.stButton>button {
+  background: linear-gradient(90deg,#2b7cff,#2ec4b6);
+  color: white;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: none;
+  font-weight: 600;
+}
 </style>
 """
 
