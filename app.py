@@ -22,7 +22,7 @@ except Exception:
 # --------------------------
 # Page config
 # --------------------------
-st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
+st.set_page_config(page_title="💰 Expense Tracker", layout="wide", initial_sidebar_state="collapsed")
 
 # --------------------------
 # MongoDB Connection
@@ -37,126 +37,148 @@ db = client["expense_tracker"]
 collection = db["expenses"]
 
 # --------------------------
-# Session state defaults
+# Session defaults
 # --------------------------
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-if "username" not in st.session_state:
-    st.session_state["username"] = None
-if "is_admin" not in st.session_state:
-    st.session_state["is_admin"] = False
+for k, v in {
+    "authenticated": False,
+    "username": None,
+    "is_admin": False,
+    "_login_error": None,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # --------------------------
-# Login page styling
+# Login CSS (disable page scroll + centered card + full-width button)
 # --------------------------
-LOGIN_CSS_PREMIUM = """
+LOGIN_CSS = """
 <style>
-/* Page background slight radial vignette for depth */
-[data-testid="stApp"] {
-  background: radial-gradient(1200px 400px at 10% 10%, rgba(43,124,255,0.04), transparent 6%),
-              radial-gradient(1200px 400px at 90% 90%, rgba(46,196,182,0.02), transparent 6%),
-              #0b0d0f;
-}
-
-/* Disable scrolling when login page is active */
+/* lock page scroll while showing login */
 html, body, [data-testid="stAppViewContainer"], [data-testid="stAppViewBlockContainer"] {
   overflow: hidden !important;
   height: 100% !important;
 }
 
-/* Center container */
+/* dark vignette background */
+[data-testid="stApp"] {
+  background: radial-gradient(1000px 320px at 8% 8%, rgba(43,124,255,0.03), transparent 6%),
+              radial-gradient(1000px 320px at 92% 92%, rgba(46,196,182,0.02), transparent 6%),
+              #0b0d0f;
+}
+
+/* outer center container fills viewport and centers card */
 .login-outer {
-  display: flex;
-  justify-content: center;
-  align-items: center;
   min-height: 100vh;
-  padding: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 16px;
+  box-sizing: border-box;
 }
 
-/* Login card */
+/* the card */
 .login-card {
-  background: #111418;
-  border-radius: 16px;
-  padding: 38px 44px;
-  width: 360px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.55);
-  text-align: center;
-  animation: fadeIn 0.7s ease;
+  width: 640px;
+  max-width: 96%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.012));
+  border-radius: 14px;
+  padding: 32px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  display: block;
 }
 
-/* Title */
-.login-title {
-  font-size: 26px;
-  font-weight: 700;
-  color: #fff;
-  margin-bottom: 6px;
-}
-.login-sub {
-  color: #a9b2bd;
-  font-size: 14px;
-  margin-bottom: 22px;
+/* title & subtitle */
+.login-title { font-size: 24px; font-weight: 800; color: #ffffff; margin-bottom: 6px; display:block; }
+.login-sub { color:#9aa3ad; margin-bottom: 18px; display:block; }
+
+/* inputs style */
+.stTextInput>div>div>input, .stTextInput>div>div>textarea, .stPassword>div>div>input {
+  background: #15171a !important;
+  color: #e6eef3 !important;
+  border-radius: 10px;
+  padding: 12px 14px;
+  height: 48px;
+  border: 1px solid rgba(255,255,255,0.02);
 }
 
-/* Inputs */
-.stTextInput > div > div > input, .stPassword > div > div > input {
-  background: #1b1f25 !important;
-  color: #e5e8eb !important;
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-size: 14px;
-}
+/* label styling */
+.login-label { font-size:13px; color:#a9b2bd; margin-bottom:6px; }
 
-/* Buttons */
+/* full-width primary button under inputs */
 .stButton > button {
-  background: linear-gradient(90deg, #2d89ff, #00d4ff);
+  width: 100% !important;
+  padding: 12px 14px !important;
+  border-radius: 10px !important;
+  font-weight: 700 !important;
+  background: linear-gradient(90deg,#2b7cff,#2ec4b6) !important;
   color: #fff !important;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  padding: 10px 0;
-  width: 100%;
-  margin-top: 8px;
-  transition: transform 0.15s ease;
-}
-.stButton > button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,212,255,0.25);
+  border: none !important;
+  box-shadow: 0 10px 30px rgba(46,196,182,0.10);
 }
 
-/* Animations */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(18px); }
-  to { opacity: 1; transform: translateY(0); }
+/* small spacing helpers */
+.spacer { height: 12px; }
+
+/* when login done we'll remove no-scroll inline (handled in show_app) */
+@media (max-width: 720px) {
+  .login-card { padding: 20px; }
+  .login-title { font-size: 20px; }
 }
 </style>
 """
 
+# --------------------------
+# Login handler
+# --------------------------
+def do_login(user: str, pwd: str):
+    secret_user = st.secrets.get("admin", {}).get("username")
+    secret_pass = st.secrets.get("admin", {}).get("password")
+    if secret_user is None or secret_pass is None:
+        st.session_state["_login_error"] = "Admin credentials not configured in secrets."
+        return False
+    if user == secret_user and pwd == secret_pass:
+        st.session_state["authenticated"] = True
+        st.session_state["username"] = user
+        st.session_state["is_admin"] = True
+        st.session_state["_login_error"] = None
+        return True
+    else:
+        st.session_state["_login_error"] = "Invalid username or password."
+        return False
+
+# --------------------------
+# Login screen
+# --------------------------
 def show_login():
-    st.markdown(LOGIN_CSS_PREMIUM, unsafe_allow_html=True)
-    st.markdown("<div class='login-outer'><div class='login-card'>", unsafe_allow_html=True)
+    st.markdown(LOGIN_CSS, unsafe_allow_html=True)
 
-    st.markdown("<div class='login-title'>💰 Expense Tracker</div>", unsafe_allow_html=True)
-    st.markdown("<div class='login-sub'>Please sign in to continue</div>", unsafe_allow_html=True)
+    # Outer centered container
+    st.markdown('<div class="login-outer">', unsafe_allow_html=True)
+    st.markdown('<div class="login-card" role="dialog" aria-labelledby="login-title">', unsafe_allow_html=True)
 
-    user = st.text_input("Username", placeholder="admin")
-    pwd = st.text_input("Password", type="password", placeholder="••••••••")
+    # Title
+    st.markdown('<div class="login-title">💰 Expense Tracker</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-sub">Please sign in to continue</div>', unsafe_allow_html=True)
 
+    # Inputs inside the card
+    user = st.text_input(label="Username", key="__login_user", placeholder="admin")
+    st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
+    pwd = st.text_input(label="Password", type="password", key="__login_pwd", placeholder="••••••••")
+
+    # Error message if any
+    if st.session_state.get("_login_error"):
+        st.error(st.session_state.get("_login_error"))
+
+    st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
+    # Single full-width button
     if st.button("Sign in"):
-        secret_user = st.secrets.get("admin", {}).get("username")
-        secret_pass = st.secrets.get("admin", {}).get("password")
-
-        if secret_user is None or secret_pass is None:
-            st.error("Admin credentials not configured in .streamlit/secrets.toml")
-        elif user == secret_user and pwd == secret_pass:
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = user
-            st.session_state["is_admin"] = True
-            st.success("✅ Login successful!")
+        success = do_login(user, pwd)
+        if success:
+            # restore normal scrolling in main app by reloading view (show_app sets scroll restore)
             st.experimental_rerun()
-        else:
-            st.error("❌ Invalid credentials")
 
-    st.markdown("</div></div>", unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # --------------------------
 # PDF generator
@@ -166,25 +188,20 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     styles = getSampleStyleSheet()
     elems = []
-
     elems.append(Paragraph(title, styles["Title"]))
     elems.append(Spacer(1, 12))
-
     total = df["amount"].sum()
     summary_text = f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     elems.append(Paragraph(summary_text, styles["Normal"]))
     elems.append(Spacer(1, 12))
-
     df_export = df.copy()
     if "timestamp" in df_export.columns:
         df_export["timestamp"] = df_export["timestamp"].astype(str)
-
     cols = [c for c in ["timestamp", "category", "friend", "amount", "notes"] if c in df_export.columns]
     table_data = [cols]
     for _, r in df_export.iterrows():
         row = [str(r.get(c, "")) for c in cols]
         table_data.append(row)
-
     tbl = Table(table_data, repeatRows=1)
     tbl_style = TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b2b2b")),
@@ -196,18 +213,17 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     ])
     tbl.setStyle(tbl_style)
     elems.append(tbl)
-
     doc.build(elems)
     pdf_bytes = buffer.getvalue()
     buffer.close()
     return pdf_bytes
 
 # --------------------------
-# Main App UI
+# Main app UI (restores scrolling)
 # --------------------------
 def show_app():
-    # Restore scrolling for main app
-    st.markdown("<style>html, body, [data-testid='stAppViewContainer'], [data-testid='stAppViewBlockContainer'] {overflow: auto !important;}</style>", unsafe_allow_html=True)
+    # restore normal scrolling for main app
+    st.markdown("<style>html, body, [data-testid='stAppViewContainer'], [data-testid='stAppViewBlockContainer'] { overflow: auto !important; height: auto !important; }</style>", unsafe_allow_html=True)
 
     st.title("💰 Personal Expense Tracker")
 
@@ -217,11 +233,13 @@ def show_app():
         if st.session_state.get("is_admin"):
             st.success("Admin")
         if st.button("Logout"):
+            # clear session keys
             for k in ["authenticated", "username", "is_admin"]:
                 if k in st.session_state:
                     del st.session_state[k]
             st.experimental_rerun()
 
+    # Expense form and rest of app unchanged
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
     friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
 
@@ -242,15 +260,8 @@ def show_app():
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
         notes = st.text_area("Comments / Notes (optional)")
         submitted = st.form_submit_button("💾 Save Expense")
-
         if submitted:
-            expense = {
-                "category": category,
-                "friend": friend,
-                "amount": float(amount),
-                "notes": notes,
-                "timestamp": datetime.now()
-            }
+            expense = {"category": category, "friend": friend, "amount": float(amount), "notes": notes, "timestamp": datetime.now()}
             collection.insert_one(expense)
             st.success("✅ Expense saved successfully!")
 
@@ -258,11 +269,10 @@ def show_app():
     if data:
         df = pd.DataFrame(data)
         df["_id"] = df["_id"].astype(str)
-
         st.subheader("📊 All Expenses (Manage)")
         delete_ids = []
         for i, row in df.iterrows():
-            c1, c2, c3, c4, c5, c6 = st.columns([2,2,2,2,2,1])
+            c1,c2,c3,c4,c5,c6 = st.columns([2,2,2,2,2,1])
             with c1: st.write(row.get("timestamp"))
             with c2: st.write(row.get("category"))
             with c3: st.write(row.get("friend"))
@@ -271,13 +281,11 @@ def show_app():
             with c6:
                 if st.checkbox("❌", key=row["_id"]):
                     delete_ids.append(row["_id"])
-
         if delete_ids and st.button("🗑️ Delete Selected"):
             for del_id in delete_ids:
                 collection.delete_one({"_id": ObjectId(del_id)})
             st.success(f"Deleted {len(delete_ids)} entries.")
             st.experimental_rerun()
-
         if st.session_state.get("is_admin"):
             st.markdown("---")
             st.subheader("⚙️ Admin Controls")
@@ -290,14 +298,11 @@ def show_app():
                 if HAS_REPORTLAB:
                     df_export = df.copy()
                     pdf_bytes = generate_pdf_bytes(df_export, title="Expense Report")
-                    st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes,
-                                       file_name="expenses_report.pdf", mime="application/pdf")
+                    st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
                 else:
                     st.error("PDF export requires 'reportlab' in requirements.txt.")
-
         total = df["amount"].sum()
         st.metric("💵 Total Spending", f"₹ {total:.2f}")
-
         c1, c2 = st.columns(2)
         with c1:
             cat_summary = df.groupby("category")["amount"].sum().reset_index()
@@ -307,19 +312,17 @@ def show_app():
             friend_summary = df.groupby("friend")["amount"].sum().reset_index()
             st.subheader("👥 Spending by Friend")
             st.plotly_chart(px.bar(friend_summary, x="friend", y="amount", text="amount", color="friend"), use_container_width=True)
-
         st.subheader("🥧 Category Breakdown")
         st.plotly_chart(px.pie(cat_summary, names="category", values="amount", title="Expenses by Category"), use_container_width=True)
-
         st.subheader("Summary by Friend")
         st.table(friend_summary.set_index("friend"))
     else:
-        st.info("No expenses yet. Add your first one above.")
+        st.info("No expenses yet. Add your first one above")
 
 # --------------------------
 # App entry
 # --------------------------
-if not st.session_state["authenticated"]:
+if not st.session_state.get("authenticated"):
     show_login()
 else:
     show_app()
