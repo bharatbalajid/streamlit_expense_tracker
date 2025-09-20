@@ -107,7 +107,7 @@ def logout():
 
 # Admin: create user
 def create_user(username: str, password: str, role: str = "user"):
-    username = username.strip()
+    username = (username or "").strip()
     if not username or not password:
         st.error("Provide username and password.")
         return
@@ -200,10 +200,6 @@ def show_app():
         return  # stop further rendering until user logs in
 
     # --------------------------
-    # Expense form + data tables + analytics
-    # --------------------------
-
-    # --------------------------
     # Expense Form
     # --------------------------
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
@@ -224,22 +220,22 @@ def show_app():
     with st.form("expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            category = st.selectbox("Expense Type", categories)
+            category = st.selectbox("Expense Type", categories, key="expense_category")
             if category == "Groceries":
-                subcat = st.selectbox("Grocery Subcategory", grocery_subcategories)
+                subcat = st.selectbox("Grocery Subcategory", grocery_subcategories, key="expense_grocery_subcat")
                 category = f"Groceries - {subcat}"
             elif category == "Others":
-                category_comment = st.text_input("Enter custom category")
+                category_comment = st.text_input("Enter custom category", key="expense_custom_category")
                 if category_comment.strip():
                     category = category_comment
         with col2:
-            friend = st.selectbox("Who Spent?", friends)
+            friend = st.selectbox("Who Spent?", friends, key="expense_friend")
             if friend == "Others":
-                friend_comment = st.text_input("Enter custom friend name")
+                friend_comment = st.text_input("Enter custom friend name", key="expense_custom_friend")
                 if friend_comment.strip():
                     friend = friend_comment
-        amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
-        notes = st.text_area("Comments / Notes (optional)")
+        amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount")
+        notes = st.text_area("Comments / Notes (optional)", key="expense_notes")
         submitted = st.form_submit_button("💾 Save Expense")
         if submitted:
             collection.insert_one({
@@ -253,9 +249,28 @@ def show_app():
             st.success("✅ Expense saved successfully!")
 
     # --------------------------
-    # Show Expenses
+    # Admin Controls (always visible to admin, even if no expenses yet)
     # --------------------------
-    # Admin sees all; normal users see only their own expenses
+    if st.session_state["is_admin"]:
+        st.markdown("---")
+        st.subheader("⚙️ Admin Controls")
+
+        with st.expander("Create new user"):
+            with st.form("create_user_form"):
+                new_username = st.text_input("Username", key="create_user_username")
+                new_password = st.text_input("Password", type="password", key="create_user_password")
+                new_role = st.selectbox("Role", ["user", "admin"], key="create_user_role")
+                create_submitted = st.form_submit_button("Create User")
+                if create_submitted:
+                    create_user(new_username, new_password, new_role)
+
+        if st.button("🔥 Delete All Expenses (Admin)", key="delete_all_admin"):
+            collection.delete_many({})
+            st.warning("⚠️ All expenses deleted by admin.")
+
+    # --------------------------
+    # Show Expenses (Admin sees all; users see only their own)
+    # --------------------------
     if st.session_state["is_admin"]:
         data = list(collection.find())
     else:
@@ -288,7 +303,7 @@ def show_app():
 
         # Delete selected (admin only)
         if st.session_state["is_admin"]:
-            if delete_ids and st.button("🗑️ Delete Selected"):
+            if delete_ids and st.button("🗑️ Delete Selected", key="delete_selected_admin"):
                 for del_id in delete_ids:
                     try:
                         collection.delete_one({"_id": ObjectId(del_id)})
@@ -298,32 +313,14 @@ def show_app():
         else:
             st.info("You cannot delete expenses. Contact admin for deletions.")
 
-        # Admin Controls: create users, delete all
-        if st.session_state["is_admin"]:
-            st.markdown("---")
-            st.subheader("⚙️ Admin Controls")
-
-            with st.expander("Create new user"):
-                with st.form("create_user_form"):
-                    new_username = st.text_input("Username")
-                    new_password = st.text_input("Password", type="password")
-                    new_role = st.selectbox("Role", ["user", "admin"])
-                    create_submitted = st.form_submit_button("Create User")
-                    if create_submitted:
-                        create_user(new_username, new_password, new_role)
-
-            if st.button("🔥 Delete All Expenses (Admin)"):
-                collection.delete_many({})
-                st.warning("⚠️ All expenses deleted by admin.")
-
         # Download: everyone can download the list they can view
         try:
-            # prepare df for download (remove ObjectId/stable fields)
             df_download = df.copy()
             if "_id" in df_download.columns:
                 df_download = df_download.drop(columns=["_id"])
             if HAS_REPORTLAB:
-                pdf_bytes = generate_pdf_bytes(df_download, title=f"Expense Report - {st.session_state['username']}" if not st.session_state["is_admin"] else "Expense Report - Admin View")
+                pdf_title = f"Expense Report - {st.session_state['username']}" if not st.session_state["is_admin"] else "Expense Report - Admin View"
+                pdf_bytes = generate_pdf_bytes(df_download, title=pdf_title)
                 st.download_button("⬇️ Download PDF (Visible Expenses)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
             else:
                 st.info("PDF export requires 'reportlab' package.")
