@@ -8,7 +8,7 @@ from bson.objectid import ObjectId
 import io
 
 # --------------------------
-# PDF generation imports (optional)
+# Optional PDF generation (ReportLab)
 # --------------------------
 HAS_REPORTLAB = True
 try:
@@ -47,78 +47,196 @@ if "is_admin" not in st.session_state:
     st.session_state["is_admin"] = False
 
 # --------------------------
-# Small centered login UI (mobile-friendly)
+# Styling for login card (match the sample)
 # --------------------------
-LOGIN_BOX_CSS = """
+LOGIN_STYLE = """
 <style>
-/* center the main content area and make the login card narrow */
+/* center container */
 [data-testid="stApp"] > div:first-child {
   display: flex;
   justify-content: center;
 }
+
+/* outer wrapper */
+.login-wrapper {
+  width: 760px;
+  max-width: calc(100% - 32px);
+  margin: 36px auto;
+  display: flex;
+  gap: 40px;
+  align-items: center;
+  justify-content: center;
+}
+
+/* left brand */
+.login-brand {
+  width: 220px;
+  min-width: 160px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+.brand-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background: linear-gradient(135deg,#2b7cff,#2ec4b6);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:white;
+  font-weight:700;
+  font-size:20px;
+}
+
+/* card */
 .login-card {
-  width: 420px;
-  max-width: calc(100% - 48px);
-  padding: 18px 22px;
-  border-radius: 10px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.45);
   background: rgba(255,255,255,0.02);
+  border-radius: 12px;
+  padding: 36px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.35);
+  display: flex;
+  flex-direction: column;
+  min-width: 360px;
 }
-.login-title {
-  font-size: 22px;
-  margin-bottom: 6px;
+
+/* headings */
+.login-title { font-size: 28px; font-weight:700; margin-bottom:6px; }
+.login-sub { color:#8f98a3; margin-bottom:18px; }
+
+/* inputs */
+.stTextInput>div>div>input,
+.stTextInput>div>div>textarea {
+  height: 46px;
+  padding: 10px 12px;
+  border-radius: 8px;
 }
-.login-sub {
-  color: #bfc7cf;
-  margin-bottom: 12px;
+
+/* helper row */
+.helper-row { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:6px; margin-bottom:14px; color:#9aa3ad; font-size:14px; }
+
+/* primary */
+.stButton>button.primary-btn {
+  background: linear-gradient(90deg,#2b7cff,#2ec4b6);
+  color: white;
+  width:100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(46,196,182,0.12);
 }
-@media (max-width: 480px) {
-  .login-card { width: 100%; padding: 12px; }
-  .login-title { font-size: 18px; }
+.stButton>button.primary-btn:active { transform: translateY(1px); }
+
+/* google button */
+.google-btn { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(150,150,150,0.12); background: transparent; cursor: pointer; }
+.google-logo { width:18px; height:18px; }
+
+/* link */
+.forgot-link { color: #2b7cff; text-decoration: none; font-size:14px; }
+
+/* responsive */
+@media (max-width: 880px) {
+  .login-wrapper { flex-direction: column; gap: 18px; padding: 18px; }
+  .login-brand { order: -1; width:100%; justify-content:flex-start; }
+  .login-card { width:100%; padding:20px; }
 }
 </style>
 """
 
-def show_login():
-    st.markdown(LOGIN_BOX_CSS, unsafe_allow_html=True)
+# --------------------------
+# Callback helpers
+# --------------------------
+def login_callback(input_user: str, input_pwd: str):
+    """Sets session state when credentials match secrets; stores errors in session."""
+    secret_user = st.secrets.get("admin", {}).get("username")
+    secret_pass = st.secrets.get("admin", {}).get("password")
 
-    # small centered card
-    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='login-title'>🔐 Admin Login</div>", unsafe_allow_html=True)
-    st.markdown("<div class='login-sub'>Sign in to access the expense tracker</div>", unsafe_allow_html=True)
+    if secret_user is None or secret_pass is None:
+        st.session_state["_login_error"] = "Admin credentials not set in .streamlit/secrets.toml"
+        return
 
-    with st.form("login_form"):
-        user = st.text_input("Username", placeholder="admin")
-        pwd = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
+    if input_user == secret_user and input_pwd == secret_pass:
+        st.session_state["authenticated"] = True
+        st.session_state["username"] = input_user
+        st.session_state["is_admin"] = True
+        st.session_state.pop("_login_error", None)
+        # attempt immediate rerun to switch view
+        if hasattr(st, "experimental_rerun"):
+            st.experimental_rerun()
+    else:
+        st.session_state["_login_error"] = "Invalid credentials"
 
-        if submitted:
-            secret_user = st.secrets.get("admin", {}).get("username")
-            secret_pass = st.secrets.get("admin", {}).get("password")
-
-            if secret_user is None or secret_pass is None:
-                st.error("Admin credentials are not configured in .streamlit/secrets.toml")
-                st.markdown("</div>", unsafe_allow_html=True)
-                return
-
-            if user == secret_user and pwd == secret_pass:
-                st.session_state["authenticated"] = True
-                st.session_state["username"] = user
-                st.session_state["is_admin"] = True
-                st.success("Login successful — opening the app...")
-                # Attempt a rerun if available to immediately show main UI
-                if hasattr(st, "experimental_rerun"):
-                    st.experimental_rerun()
-            else:
-                st.error("Invalid credentials")
-
-    st.markdown("</div>", unsafe_allow_html=True)
+def logout_callback():
+    """Clears session state and reruns if possible."""
+    for k in ["authenticated", "username", "is_admin"]:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.session_state.pop("_login_error", None)
+    if hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
 
 # --------------------------
-# PDF helper
+# Login UI (styled, single-click)
+# --------------------------
+def show_login():
+    st.markdown(LOGIN_STYLE, unsafe_allow_html=True)
+    st.markdown("<div class='login-wrapper'>", unsafe_allow_html=True)
+
+    brand_html = """
+    <div class='login-brand'>
+      <div class='brand-logo'>IB</div>
+      <div style='font-weight:700; font-size:18px'>InsideBox</div>
+      <div style='color:#9aa3ad; font-size:13px; max-width:200px'>
+        Welcome back — sign in to continue to your expense dashboard.
+      </div>
+    </div>
+    """
+    st.markdown(brand_html, unsafe_allow_html=True)
+
+    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='login-title'>Welcome back</div>", unsafe_allow_html=True)
+    st.markdown("<div class='login-sub'>Please enter your details</div>", unsafe_allow_html=True)
+
+    # form with keys so callback receives stable values
+    with st.form("login_form_v2"):
+        email = st.text_input("Email address", key="__login_email", placeholder="you@example.com")
+        pwd = st.text_input("Password", type="password", key="__login_pwd")
+        remember = st.checkbox("Remember for 30 days", value=False, key="__login_remember")
+
+        cols = st.columns([1,1])
+        with cols[1]:
+            st.markdown("<div style='text-align:right'><a class='forgot-link' href='#'>Forgot password</a></div>", unsafe_allow_html=True)
+
+        # single-click submit via callback
+        st.form_submit_button("Sign in", on_click=login_callback,
+                              args=(st.session_state.get("__login_email",""), st.session_state.get("__login_pwd","")),
+                              kwargs={},
+                              help="Sign in")
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+        # visual Google sign-in button (UI only)
+        st.markdown("""
+        <button class='google-btn' onclick="(function(){})()">
+          <img class='google-logo' src='https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg' />
+          <span style='font-weight:600; color:#444'>Sign in with Google</span>
+        </button>
+        """, unsafe_allow_html=True)
+
+    # show login errors stored in session
+    if st.session_state.get("_login_error"):
+        st.error(st.session_state.get("_login_error"))
+
+    st.markdown("</div>", unsafe_allow_html=True)  # close card
+    st.markdown("</div>", unsafe_allow_html=True)  # close wrapper
+
+# --------------------------
+# PDF generator
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
-    """Create a simple PDF with a title, summary, and a table of expenses."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     styles = getSampleStyleSheet()
@@ -160,7 +278,7 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# Main app UI
+# Main app UI (after login)
 # --------------------------
 def show_app():
     st.title("💰 Personal Expense Tracker")
@@ -170,17 +288,7 @@ def show_app():
         st.write(f"User: **{st.session_state.get('username','-')}**")
         if st.session_state.get("is_admin"):
             st.success("Admin")
-        if st.button("Logout"):
-            # clear only the relevant session keys
-            for k in ["authenticated", "username", "is_admin"]:
-                if k in st.session_state:
-                    del st.session_state[k]
-            # best effort: trigger a rerun if supported
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
-            else:
-                st.info("Logged out — please refresh if the view does not update")
-                return
+        st.button("Logout", on_click=logout_callback, key="__logout_btn")
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
@@ -253,7 +361,6 @@ def show_app():
                     collection.delete_many({})
                     st.warning("⚠️ All expenses deleted by admin.")
             with col_b:
-                # Export PDF instead of CSV
                 if not HAS_REPORTLAB:
                     st.error("PDF export requires 'reportlab' in requirements.txt. Add it to requirements.txt.")
                 else:
