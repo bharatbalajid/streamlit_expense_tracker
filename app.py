@@ -39,83 +39,68 @@ collection = db["expenses"]
 # --------------------------
 # Session defaults
 # --------------------------
-for k, v in {
+default_state = {
     "authenticated": False,
     "username": None,
     "is_admin": False,
     "_login_error": None,
-    "__login_email": "",
+    "__login_user": "",
     "__login_pwd": ""
-}.items():
+}
+for k, v in default_state.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # --------------------------
-# CSS for login overlay
+# CSS for login card (no overlay)
 # --------------------------
-LOGIN_STYLE_OVERLAY = """
+LOGIN_CSS = """
 <style>
-.login-overlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9998;
-}
-.login-overlay__mask {
-  position: absolute;
-  inset: 0;
-  background: #0b0d0f; /* dark background */
-  opacity: 1;
-}
 .login-card {
-  position: relative;
-  z-index: 9999;
-  width: 420px;
-  max-width: calc(100% - 48px);
-  padding: 28px 30px;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
   background: rgba(255,255,255,0.02);
+  border-radius: 12px;
+  padding: 28px 30px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  max-width: 620px;
+  margin: 40px auto;
 }
 .login-title {
   font-size: 24px;
   font-weight: 700;
   margin-bottom: 6px;
-  text-align: center;
+  text-align: left;
 }
 .login-sub {
   color: #9aa3ad;
   margin-bottom: 18px;
-  text-align: center;
+  text-align: left;
 }
-.stTextInput>div>div>input {
+.input-wide .stTextInput>div>div>input {
   height: 46px;
   padding: 10px 12px;
   border-radius: 8px;
 }
-.stButton>button {
+.signin-btn .stButton>button {
   background: linear-gradient(90deg,#2b7cff,#2ec4b6);
   color: white;
-  width: 100%;
+  width: 160px;
   padding: 10px 12px;
   border-radius: 8px;
   border: none;
   font-weight: 600;
 }
-@media (max-width: 480px) {
-  .login-card { width: calc(100% - 32px); padding: 18px; }
+@media (max-width: 880px) {
+  .login-card { margin: 20px; padding: 20px; }
   .login-title { font-size: 20px; }
 }
 </style>
 """
 
 # --------------------------
-# Callbacks
+# Authentication callbacks
 # --------------------------
-def login_callback_plain():
-    user = st.session_state.get("__login_email", "").strip()
+def login_callback():
+    user = st.session_state.get("__login_user", "").strip()
     pwd = st.session_state.get("__login_pwd", "")
     secret_user = st.secrets.get("admin", {}).get("username")
     secret_pass = st.secrets.get("admin", {}).get("password")
@@ -129,53 +114,57 @@ def login_callback_plain():
         st.session_state["username"] = user
         st.session_state["is_admin"] = True
         st.session_state["_login_error"] = None
+        # try to rerun to show app immediately
         if hasattr(st, "experimental_rerun"):
             st.experimental_rerun()
     else:
         st.session_state["_login_error"] = "Invalid credentials"
 
-def logout_callback_plain():
+def logout_callback():
     for k in ["authenticated", "username", "is_admin"]:
         if k in st.session_state:
             del st.session_state[k]
-    st.session_state.update({"authenticated": False, "username": None, "is_admin": False})
-    st.session_state["_login_error"] = None
+    # restore defaults
+    for k, v in default_state.items():
+        st.session_state[k] = v
     if hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
 
 # --------------------------
-# Login Page
+# Login page (centered using columns; inputs inside the card)
 # --------------------------
 def show_login():
-    st.markdown(LOGIN_STYLE_OVERLAY, unsafe_allow_html=True)
+    st.markdown(LOGIN_CSS, unsafe_allow_html=True)
 
-    # Create the centered login card container
-    st.markdown(
-        """
-        <div class="login-overlay">
-          <div class="login-overlay__mask"></div>
-          <div class="login-card" id="login-card">
-            <div style="text-align:center;">
-              <div class="login-title">💰 Expense Tracker</div>
-              <div class="login-sub">Please sign in to continue</div>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # create three columns and put the card in the middle column to center it
+    left, center, right = st.columns([1, 2, 1])
+    with center:
+        # card wrapper
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
 
-    # Put the form inside the styled card
-    user = st.text_input("Username", key="__login_email", placeholder="Username")
-    pwd = st.text_input("Password", type="password", key="__login_pwd")
-    login_btn = st.button("Sign in", key="__login_btn")
+        # Title + subtitle
+        st.markdown('<div class="login-title">💰 Expense Tracker</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-sub">Please sign in to continue</div>', unsafe_allow_html=True)
 
-    if login_btn:
-        login_callback_plain()
+        # Input fields — use keys bound to session_state
+        st.text_input("Username", key="__login_user", placeholder="admin", label_visibility="hidden", help="")
+        st.text_input("Password", type="password", key="__login_pwd", placeholder="", label_visibility="hidden")
 
-    if st.session_state.get("_login_error"):
-        st.error(st.session_state.get("_login_error"))
+        # show login error if present
+        if st.session_state.get("_login_error"):
+            st.error(st.session_state.get("_login_error"))
 
-    # Close the login-card div
-    st.markdown("</div></div>", unsafe_allow_html=True)
+        # sign in button (single click)
+        cols = st.columns([1, 3])
+        with cols[0]:
+            # spacing
+            st.write("")
+        with cols[1]:
+            st.markdown('<div class="signin-btn">', unsafe_allow_html=True)
+            st.button("Sign in", on_click=login_callback, key="__login_btn")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)  # close card
 
 # --------------------------
 # PDF generator
@@ -216,7 +205,7 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# Main app
+# Main App UI
 # --------------------------
 def show_app():
     st.title("💰 Personal Expense Tracker")
@@ -226,7 +215,7 @@ def show_app():
         st.write(f"User: **{st.session_state.get('username','-')}**")
         if st.session_state.get("is_admin"):
             st.success("Admin")
-        st.button("Logout", on_click=logout_callback_plain, key="__logout_btn")
+        st.button("Logout", on_click=logout_callback, key="__logout_btn")
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
@@ -313,7 +302,7 @@ def show_app():
         st.info("No expenses yet. Add your first one above")
 
 # --------------------------
-# Entry point
+# Entry
 # --------------------------
 if not st.session_state.get("authenticated"):
     show_login()
