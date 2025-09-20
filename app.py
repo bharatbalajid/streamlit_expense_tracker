@@ -51,40 +51,47 @@ for k, v in {
         st.session_state[k] = v
 
 # --------------------------
-# Styling
+# CSS for login overlay
 # --------------------------
-LOGIN_STYLE = """
+LOGIN_STYLE_OVERLAY = """
 <style>
-/* Center the login wrapper without touching stApp root */
-.login-wrapper {
-  width: 420px;
-  max-width: calc(100% - 32px);
-  margin: 60px auto;
+.login-overlay {
+  position: fixed;
+  inset: 0;
   display: flex;
+  align-items: center;
   justify-content: center;
+  z-index: 9998;
+}
+.login-overlay__mask {
+  position: absolute;
+  inset: 0;
+  background: #0b0d0f; /* dark background */
+  opacity: 1;
 }
 .login-card {
-  background: rgba(255,255,255,0.02);
+  position: relative;
+  z-index: 9999;
+  width: 420px;
+  max-width: calc(100% - 48px);
+  padding: 28px 30px;
   border-radius: 12px;
-  padding: 32px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.35);
-  display: flex;
-  flex-direction: column;
-  width: 100%;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  background: rgba(255,255,255,0.02);
 }
 .login-title {
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 700;
   margin-bottom: 6px;
   text-align: center;
 }
 .login-sub {
-  color: #8f98a3;
+  color: #9aa3ad;
   margin-bottom: 18px;
   text-align: center;
 }
 .stTextInput>div>div>input {
-  height: 44px;
+  height: 46px;
   padding: 10px 12px;
   border-radius: 8px;
 }
@@ -92,10 +99,14 @@ LOGIN_STYLE = """
   background: linear-gradient(90deg,#2b7cff,#2ec4b6);
   color: white;
   width: 100%;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: 8px;
   border: none;
   font-weight: 600;
+}
+@media (max-width: 480px) {
+  .login-card { width: calc(100% - 32px); padding: 18px; }
+  .login-title { font-size: 20px; }
 }
 </style>
 """
@@ -104,7 +115,6 @@ LOGIN_STYLE = """
 # Callbacks
 # --------------------------
 def login_callback_plain():
-    """Read inputs from session_state and authenticate."""
     user = st.session_state.get("__login_email", "").strip()
     pwd = st.session_state.get("__login_pwd", "")
     secret_user = st.secrets.get("admin", {}).get("username")
@@ -119,7 +129,6 @@ def login_callback_plain():
         st.session_state["username"] = user
         st.session_state["is_admin"] = True
         st.session_state["_login_error"] = None
-        # immediate rerun if supported
         if hasattr(st, "experimental_rerun"):
             st.experimental_rerun()
     else:
@@ -135,33 +144,35 @@ def logout_callback_plain():
         st.experimental_rerun()
 
 # --------------------------
-# Login UI (NO st.form) -> single click
+# Login Page
 # --------------------------
 def show_login():
-    st.markdown(LOGIN_STYLE, unsafe_allow_html=True)
-    st.markdown("<div class='login-wrapper'>", unsafe_allow_html=True)
+    st.markdown(LOGIN_STYLE_OVERLAY, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="login-overlay">
+          <div class="login-overlay__mask"></div>
+          <div class="login-card">
+            <div style="text-align:center;">
+              <div class="login-title">💰 Expense Tracker</div>
+              <div class="login-sub">Please sign in to continue</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Centered login card only
-    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='login-title'>💰 Expense Tracker</div>", unsafe_allow_html=True)
-    st.markdown("<div class='login-sub'>Please sign in to continue</div>", unsafe_allow_html=True)
-
-    # Inputs
+    # Fields + button
     st.text_input("Username", key="__login_email", placeholder="Username")
     st.text_input("Password", type="password", key="__login_pwd")
-
-    # Login button
     st.button("Sign in", on_click=login_callback_plain, key="__login_btn")
 
-    # Error message if login failed
     if st.session_state.get("_login_error"):
         st.error(st.session_state.get("_login_error"))
 
-    st.markdown("</div>", unsafe_allow_html=True)  # close login-card
-    st.markdown("</div>", unsafe_allow_html=True)  # close wrapper
-
 # --------------------------
-# PDF generator (same as before)
+# PDF generator
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     buffer = io.BytesIO()
@@ -199,7 +210,7 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# Main app UI
+# Main app
 # --------------------------
 def show_app():
     st.title("💰 Personal Expense Tracker")
