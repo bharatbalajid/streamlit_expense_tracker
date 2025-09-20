@@ -22,7 +22,7 @@ collection = db["expenses"]
 # --------------------------
 # Page config
 # --------------------------
-st.set_page_config(page_title="💰 Personal Expense Tracker", layout="wide")
+st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 
 # --------------------------
 # Session state defaults
@@ -35,29 +35,45 @@ if "is_admin" not in st.session_state:
     st.session_state["is_admin"] = False
 
 # --------------------------
-# Simple login page shown first (portable/narrow)
+# Small centered login UI (mobile-friendly)
 # --------------------------
-def show_login():
-    # center the login box and limit width for mobile/portable feel
-    st.markdown(
-        """
-        <style>
-        .login-box {
-            max-width: 520px;
-            margin: 30px auto;
-            padding: 16px;
-        }
-        @media (max-width: 600px) {
-            .login-box { margin: 10px 12px; padding: 8px; }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+LOGIN_BOX_CSS = """
+<style>
+/* center the main content area and make the login card narrow */
+[data-testid="stApp"] > div:first-child {
+  display: flex;
+  justify-content: center;
+}
+.login-card {
+  width: 420px;
+  max-width: calc(100% - 48px);
+  padding: 18px 22px;
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+  background: rgba(255,255,255,0.02);
+}
+.login-title {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+.login-sub {
+  color: #bfc7cf;
+  margin-bottom: 12px;
+}
+@media (max-width: 480px) {
+  .login-card { width: 100%; padding: 12px; }
+  .login-title { font-size: 18px; }
+}
+</style>
+"""
 
-    st.markdown("<div class='login-box'>", unsafe_allow_html=True)
-    st.title("🔐 Admin Login")
-    st.write("Sign in to access the expense tracker")
+def show_login():
+    st.markdown(LOGIN_BOX_CSS, unsafe_allow_html=True)
+
+    # small centered card
+    st.markdown("<div class='login-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='login-title'>🔐 Admin Login</div>", unsafe_allow_html=True)
+    st.markdown("<div class='login-sub'>Sign in to access the expense tracker</div>", unsafe_allow_html=True)
 
     with st.form("login_form"):
         user = st.text_input("Username", placeholder="admin")
@@ -70,48 +86,43 @@ def show_login():
 
             if secret_user is None or secret_pass is None:
                 st.error("Admin credentials are not configured in .streamlit/secrets.toml")
+                st.markdown("</div>", unsafe_allow_html=True)
                 return
 
             if user == secret_user and pwd == secret_pass:
                 st.session_state["authenticated"] = True
                 st.session_state["username"] = user
                 st.session_state["is_admin"] = True
-                st.success("Login successful — redirected to the app")
-                # try to rerun immediately if supported
+                st.success("Login successful — opening the app...")
+                # Attempt a rerun if available to immediately show main UI
                 if hasattr(st, "experimental_rerun"):
                     st.experimental_rerun()
-                return
             else:
                 st.error("Invalid credentials")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
 # --------------------------
-# Main app UI (after login)
+# Main app UI
 # --------------------------
 def show_app():
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar: show status and logout
     with st.sidebar:
         st.header("🔒 Account")
-        st.write(f"User: **{st.session_state['username']}**")
+        st.write(f"User: **{st.session_state.get('username','-')}**")
         if st.session_state.get("is_admin"):
             st.success("Admin")
-        else:
-            st.info("User")
-
         if st.button("Logout"):
-            # reset session state for a clean logout
-            st.session_state["authenticated"] = False
-            st.session_state["username"] = None
-            st.session_state["is_admin"] = False
-            # attempt immediate rerun if available, otherwise show message
+            # clear only the relevant session keys
+            for k in ["authenticated", "username", "is_admin"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            # best effort: trigger a rerun if supported
             if hasattr(st, "experimental_rerun"):
                 st.experimental_rerun()
             else:
-                st.experimental_set_query_params() if hasattr(st, "experimental_set_query_params") else None
-                st.success("Logged out — please refresh the page if view does not update")
+                st.info("Logged out — please refresh if the view does not update")
                 return
 
     # Expense form
