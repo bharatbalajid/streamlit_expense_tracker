@@ -233,6 +233,31 @@ def show_app():
 
     # Expense form
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
+
+    grocery_subcategories = [
+    # If Groceries selected, show subcategories
+        "Vegetables",
+        "Fruits",
+        "Milk & Dairy",
+        "Rice & Grains",
+        "Lentils & Pulses",
+        "Spices & Masalas",
+        "Oil & Ghee",
+        "Snacks & Packaged Items",
+        "Bakery & Beverages",
+        "Medical & Household Essentials"
+    ]
+
+    with col1:
+        category = st.selectbox("Expense Type", categories)
+        if category == "Groceries":
+            subcat = st.selectbox("Grocery Subcategory", grocery_subcategories)
+            category = f"Groceries - {subcat}"
+        elif category == "Others":
+            category_comment = st.text_input("Enter custom category")
+            if category_comment.strip():
+                category = category_comment
+
     friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
 
     with st.form("expense_form", clear_on_submit=True):
