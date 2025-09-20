@@ -5,10 +5,7 @@ import pandas as pd
 from datetime import datetime
 from bson.objectid import ObjectId
 import io
-
-# --------------------------
-# Add missing import for plotly.express (fixes NameError: px)
-# --------------------------
+import hashlib
 import plotly.express as px
 
 # --------------------------
@@ -34,6 +31,7 @@ st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 MONGO_URI = st.secrets.get("mongo", {}).get("uri")
 DB_NAME = st.secrets.get("mongo", {}).get("db", "expense_tracker")
 COLLECTION_NAME = st.secrets.get("mongo", {}).get("collection", "expenses")
+USERS_COLLECTION = "users"
 
 if not MONGO_URI:
     st.error("MongoDB URI not configured in .streamlit/secrets.toml")
@@ -42,6 +40,29 @@ if not MONGO_URI:
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 collection = db[COLLECTION_NAME]
+users_col = db[USERS_COLLECTION]
+
+# --------------------------
+# Helpers: password hashing
+# --------------------------
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+# Ensure super-admin exists from secrets
+def ensure_superadmin():
+    secret_user = st.secrets.get("admin", {}).get("username")
+    secret_pass = st.secrets.get("admin", {}).get("password")
+    if secret_user and secret_pass:
+        existing = users_col.find_one({"username": secret_user})
+        if not existing:
+            users_col.insert_one({
+                "username": secret_user,
+                "password_hash": hash_password(secret_pass),
+                "role": "admin",
+                "created_at": datetime.utcnow()
+            })
+
+ensure_superadmin()
 
 # --------------------------
 # Session defaults
@@ -61,17 +82,19 @@ if "_login_error" not in st.session_state:
 def login():
     user = st.session_state.get("login_user", "").strip()
     pwd = st.session_state.get("login_pwd", "")
-    secret_user = st.secrets.get("admin", {}).get("username")
-    secret_pass = st.secrets.get("admin", {}).get("password")
-
-    if secret_user is None or secret_pass is None:
-        st.session_state["_login_error"] = "Admin credentials not configured"
+    if not user or not pwd:
+        st.session_state["_login_error"] = "Provide both username and password."
         return
 
-    if user == secret_user and pwd == secret_pass:
+    u = users_col.find_one({"username": user})
+    if not u:
+        st.session_state["_login_error"] = "Invalid username or password."
+        return
+
+    if u.get("password_hash") == hash_password(pwd):
         st.session_state["authenticated"] = True
         st.session_state["username"] = user
-        st.session_state["is_admin"] = True
+        st.session_state["is_admin"] = (u.get("role") == "admin")
         st.session_state["_login_error"] = None
     else:
         st.session_state["_login_error"] = "Invalid username or password."
@@ -81,6 +104,23 @@ def logout():
     st.session_state["username"] = None
     st.session_state["is_admin"] = False
     st.session_state["_login_error"] = None
+
+# Admin: create user
+def create_user(username: str, password: str, role: str = "user"):
+    username = username.strip()
+    if not username or not password:
+        st.error("Provide username and password.")
+        return
+    if users_col.find_one({"username": username}):
+        st.error("User already exists.")
+        return
+    users_col.insert_one({
+        "username": username,
+        "password_hash": hash_password(password),
+        "role": role,
+        "created_at": datetime.utcnow()
+    })
+    st.success(f"User '{username}' created with role '{role}'.")
 
 # --------------------------
 # PDF Export helper
@@ -104,7 +144,7 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     if "timestamp" in df_export.columns:
         df_export["timestamp"] = df_export["timestamp"].astype(str)
 
-    cols = [c for c in ["timestamp", "category", "friend", "amount", "notes"] if c in df_export.columns]
+    cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
     table_data = [cols]
     for _, r in df_export.iterrows():
         table_data.append([str(r.get(c, "")) for c in cols])
@@ -160,7 +200,7 @@ def show_app():
         return  # stop further rendering until user logs in
 
     # --------------------------
-    # Expense form + data tables + analytics (as before)
+    # Expense form + data tables + analytics
     # --------------------------
 
     # --------------------------
@@ -207,28 +247,30 @@ def show_app():
                 "friend": friend,
                 "amount": float(amount),
                 "notes": notes,
-                "timestamp": datetime.now()
+                "timestamp": datetime.now(),
+                "owner": st.session_state["username"]
             })
             st.success("✅ Expense saved successfully!")
 
     # --------------------------
     # Show Expenses
     # --------------------------
-    data = list(collection.find())
+    # Admin sees all; normal users see only their own expenses
+    if st.session_state["is_admin"]:
+        data = list(collection.find())
+    else:
+        data = list(collection.find({"owner": st.session_state["username"]}))
+
     if data:
         df = pd.DataFrame(data)
-
-        # convert ObjectId to string for UI keys and deletion
         df["_id"] = df["_id"].astype(str)
-
-        # ensure timestamp column is friendly
         if "timestamp" in df.columns:
             df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
 
         st.subheader("📊 All Expenses (Manage)")
         delete_ids = []
+
         for i, row in df.iterrows():
-            # make checkbox keys unique and stable
             checkbox_key = f"del_{row['_id']}"
             c1,c2,c3,c4,c5,c6 = st.columns([2,2,2,2,2,1])
             with c1: st.write(row.get("timestamp"))
@@ -237,42 +279,61 @@ def show_app():
             with c4: st.write(f"₹ {row.get('amount')}")
             with c5: st.write(row.get("notes") or "-")
             with c6:
-                if st.checkbox("❌", key=checkbox_key):
-                    delete_ids.append(row["_id"])
+                # Only show delete checkbox to admins
+                if st.session_state["is_admin"]:
+                    if st.checkbox("❌", key=checkbox_key):
+                        delete_ids.append(row["_id"])
+                else:
+                    st.write("")  # placeholder to keep layout
 
-        if delete_ids and st.button("🗑️ Delete Selected"):
-            for del_id in delete_ids:
-                # del_id is string representation of ObjectId
-                try:
-                    collection.delete_one({"_id": ObjectId(del_id)})
-                except Exception:
-                    # If not an ObjectId (just in case), try string match
-                    collection.delete_one({"_id": del_id})
+        # Delete selected (admin only)
+        if st.session_state["is_admin"]:
+            if delete_ids and st.button("🗑️ Delete Selected"):
+                for del_id in delete_ids:
+                    try:
+                        collection.delete_one({"_id": ObjectId(del_id)})
+                    except Exception:
+                        collection.delete_one({"_id": del_id})
+                st.success("Deleted selected expenses.")
+        else:
+            st.info("You cannot delete expenses. Contact admin for deletions.")
 
+        # Admin Controls: create users, delete all
         if st.session_state["is_admin"]:
             st.markdown("---")
             st.subheader("⚙️ Admin Controls")
+
+            with st.expander("Create new user"):
+                with st.form("create_user_form"):
+                    new_username = st.text_input("Username")
+                    new_password = st.text_input("Password", type="password")
+                    new_role = st.selectbox("Role", ["user", "admin"])
+                    create_submitted = st.form_submit_button("Create User")
+                    if create_submitted:
+                        create_user(new_username, new_password, new_role)
+
             if st.button("🔥 Delete All Expenses (Admin)"):
                 collection.delete_many({})
                 st.warning("⚠️ All expenses deleted by admin.")
+
+        # Download: everyone can download the list they can view
+        try:
+            # prepare df for download (remove ObjectId/stable fields)
+            df_download = df.copy()
+            if "_id" in df_download.columns:
+                df_download = df_download.drop(columns=["_id"])
             if HAS_REPORTLAB:
-                pdf_bytes = generate_pdf_bytes(df, title="Expense Report")
-                st.download_button("⬇️ Download PDF (Admin)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
+                pdf_bytes = generate_pdf_bytes(df_download, title=f"Expense Report - {st.session_state['username']}" if not st.session_state["is_admin"] else "Expense Report - Admin View")
+                st.download_button("⬇️ Download PDF (Visible Expenses)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
             else:
-                st.error("PDF export requires 'reportlab'.")
+                st.info("PDF export requires 'reportlab' package.")
+        except Exception as e:
+            st.error(f"Failed to prepare download: {e}")
 
-        st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}")
+        st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}" if "amount" in df.columns else "₹ 0.00")
 
-        # protect groupby if columns missing
-        if "category" in df.columns and "amount" in df.columns:
-            cat_summary = df.groupby("category")["amount"].sum().reset_index()
-        else:
-            cat_summary = pd.DataFrame(columns=["category", "amount"])
-
-        if "friend" in df.columns and "amount" in df.columns:
-            friend_summary = df.groupby("friend")["amount"].sum().reset_index()
-        else:
-            friend_summary = pd.DataFrame(columns=["friend", "amount"])
+        cat_summary = df.groupby("category")["amount"].sum().reset_index() if "category" in df.columns and "amount" in df.columns else pd.DataFrame(columns=["category", "amount"])
+        friend_summary = df.groupby("friend")["amount"].sum().reset_index() if "friend" in df.columns and "amount" in df.columns else pd.DataFrame(columns=["friend", "amount"])
 
         c1, c2 = st.columns(2)
         with c1:
@@ -299,6 +360,7 @@ def show_app():
             st.table(friend_summary.set_index("friend"))
         else:
             st.info("No friend summary yet.")
+
     else:
         st.info("No expenses yet. Add your first one above.")
 
