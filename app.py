@@ -117,7 +117,7 @@ def show_login():
     st.markdown("<div class='login-sub'>Please sign in to continue</div>", unsafe_allow_html=True)
 
     # Inputs
-    st.text_input("Email address", key="__login_email", placeholder="you@example.com")
+    st.text_input("Username", key="__login_email", placeholder="Username")
     st.text_input("Password", type="password", key="__login_pwd")
 
     # Login button
