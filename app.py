@@ -148,28 +148,34 @@ def logout_callback_plain():
 # --------------------------
 def show_login():
     st.markdown(LOGIN_STYLE_OVERLAY, unsafe_allow_html=True)
+
+    # Create the centered login card container
     st.markdown(
         """
         <div class="login-overlay">
           <div class="login-overlay__mask"></div>
-          <div class="login-card">
+          <div class="login-card" id="login-card">
             <div style="text-align:center;">
               <div class="login-title">💰 Expense Tracker</div>
               <div class="login-sub">Please sign in to continue</div>
             </div>
-          </div>
-        </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # Fields + button
-    st.text_input("Username", key="__login_email", placeholder="Username")
-    st.text_input("Password", type="password", key="__login_pwd")
-    st.button("Sign in", on_click=login_callback_plain, key="__login_btn")
+    # Put the form inside the styled card
+    user = st.text_input("Username", key="__login_email", placeholder="Username")
+    pwd = st.text_input("Password", type="password", key="__login_pwd")
+    login_btn = st.button("Sign in", key="__login_btn")
+
+    if login_btn:
+        login_callback_plain()
 
     if st.session_state.get("_login_error"):
         st.error(st.session_state.get("_login_error"))
+
+    # Close the login-card div
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 # --------------------------
 # PDF generator
