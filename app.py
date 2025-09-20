@@ -7,6 +7,11 @@ from bson.objectid import ObjectId
 import io
 
 # --------------------------
+# Add missing import for plotly.express (fixes NameError: px)
+# --------------------------
+import plotly.express as px
+
+# --------------------------
 # Optional PDF generation (ReportLab)
 # --------------------------
 HAS_REPORTLAB = True
@@ -81,6 +86,9 @@ def logout():
 # PDF Export helper
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
+    if not HAS_REPORTLAB:
+        raise RuntimeError("reportlab not available")
+
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     styles = getSampleStyleSheet()
@@ -88,7 +96,7 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
 
     elems.append(Paragraph(title, styles["Title"]))
     elems.append(Spacer(1, 12))
-    total = df["amount"].sum()
+    total = df["amount"].sum() if "amount" in df.columns else 0.0
     elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
     elems.append(Spacer(1, 12))
 
@@ -154,8 +162,6 @@ def show_app():
     # --------------------------
     # Expense form + data tables + analytics (as before)
     # --------------------------
-    ...
-
 
     # --------------------------
     # Expense Form
@@ -211,11 +217,19 @@ def show_app():
     data = list(collection.find())
     if data:
         df = pd.DataFrame(data)
+
+        # convert ObjectId to string for UI keys and deletion
         df["_id"] = df["_id"].astype(str)
+
+        # ensure timestamp column is friendly
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
 
         st.subheader("📊 All Expenses (Manage)")
         delete_ids = []
         for i, row in df.iterrows():
+            # make checkbox keys unique and stable
+            checkbox_key = f"del_{row['_id']}"
             c1,c2,c3,c4,c5,c6 = st.columns([2,2,2,2,2,1])
             with c1: st.write(row.get("timestamp"))
             with c2: st.write(row.get("category"))
@@ -223,12 +237,17 @@ def show_app():
             with c4: st.write(f"₹ {row.get('amount')}")
             with c5: st.write(row.get("notes") or "-")
             with c6:
-                if st.checkbox("❌", key=row["_id"]):
+                if st.checkbox("❌", key=checkbox_key):
                     delete_ids.append(row["_id"])
 
         if delete_ids and st.button("🗑️ Delete Selected"):
             for del_id in delete_ids:
-                collection.delete_one({"_id": ObjectId(del_id)})
+                # del_id is string representation of ObjectId
+                try:
+                    collection.delete_one({"_id": ObjectId(del_id)})
+                except Exception:
+                    # If not an ObjectId (just in case), try string match
+                    collection.delete_one({"_id": del_id})
 
         if st.session_state["is_admin"]:
             st.markdown("---")
@@ -244,22 +263,42 @@ def show_app():
 
         st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}")
 
-        cat_summary = df.groupby("category")["amount"].sum().reset_index()
-        friend_summary = df.groupby("friend")["amount"].sum().reset_index()
+        # protect groupby if columns missing
+        if "category" in df.columns and "amount" in df.columns:
+            cat_summary = df.groupby("category")["amount"].sum().reset_index()
+        else:
+            cat_summary = pd.DataFrame(columns=["category", "amount"])
+
+        if "friend" in df.columns and "amount" in df.columns:
+            friend_summary = df.groupby("friend")["amount"].sum().reset_index()
+        else:
+            friend_summary = pd.DataFrame(columns=["friend", "amount"])
 
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("📌 Spending by Category")
-            st.plotly_chart(px.bar(cat_summary, x="category", y="amount", text="amount", color="category"), use_container_width=True)
+            if not cat_summary.empty:
+                st.plotly_chart(px.bar(cat_summary, x="category", y="amount", text="amount", color="category"), use_container_width=True)
+            else:
+                st.info("No category data to plot.")
         with c2:
             st.subheader("👥 Spending by Friend")
-            st.plotly_chart(px.bar(friend_summary, x="friend", y="amount", text="amount", color="friend"), use_container_width=True)
+            if not friend_summary.empty:
+                st.plotly_chart(px.bar(friend_summary, x="friend", y="amount", text="amount", color="friend"), use_container_width=True)
+            else:
+                st.info("No friend data to plot.")
 
         st.subheader("🥧 Category Breakdown")
-        st.plotly_chart(px.pie(cat_summary, names="category", values="amount", title="Expenses by Category"), use_container_width=True)
+        if not cat_summary.empty:
+            st.plotly_chart(px.pie(cat_summary, names="category", values="amount", title="Expenses by Category"), use_container_width=True)
+        else:
+            st.info("No category data for pie chart.")
 
         st.subheader("Summary by Friend")
-        st.table(friend_summary.set_index("friend"))
+        if not friend_summary.empty:
+            st.table(friend_summary.set_index("friend"))
+        else:
+            st.info("No friend summary yet.")
     else:
         st.info("No expenses yet. Add your first one above.")
 
