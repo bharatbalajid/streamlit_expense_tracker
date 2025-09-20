@@ -4,6 +4,17 @@ import pandas as pd
 from datetime import datetime
 import plotly.express as px
 from bson.objectid import ObjectId
+import io
+
+# --------------------------
+# PDF Export (ReportLab)
+# --------------------------
+HAS_REPORTLAB = True
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+except ImportError:
+    HAS_REPORTLAB = False
 
 
 # --------------------------
@@ -20,6 +31,36 @@ def get_collection():
 
     client = MongoClient(MONGO_URI)
     return client[DB_NAME][COLLECTION_NAME]
+
+
+# --------------------------
+# Login
+# --------------------------
+def login():
+    st.sidebar.title("🔐 Login")
+    users = {
+        "admin": "admin123",   # full access
+        "balaji": "balaji123", # can delete
+        "iyyapa": "iyyapa123", # can delete
+        "gokul": "gokul123",   # view only
+    }
+
+    username = st.sidebar.text_input("Username")
+    password = st.sidebar.text_input("Password", type="password")
+
+    if st.sidebar.button("Login"):
+        if username in users and users[username] == password:
+            st.session_state["user"] = username
+            st.sidebar.success(f"✅ Logged in as {username}")
+            st.experimental_rerun()
+        else:
+            st.sidebar.error("❌ Invalid credentials")
+
+    if "user" in st.session_state:
+        st.sidebar.info(f"👤 {st.session_state['user']}")
+        if st.sidebar.button("Logout"):
+            st.session_state.pop("user")
+            st.experimental_rerun()
 
 
 # --------------------------
@@ -98,7 +139,7 @@ def show_analytics(df: pd.DataFrame):
 # --------------------------
 def show_transactions(df: pd.DataFrame, collection):
     st.markdown("### 📝 Transactions")
-    allowed_deleters = ["Balaji", "Iyyappa"]
+    allowed_deleters = ["admin", "balaji", "iyyapa"]
 
     for _, row in df.sort_values(by="date", ascending=False).iterrows():
         with st.expander(f"📌 {row['date']} - {row['category']} - ₹{row['amount']} (by {row['friend']})"):
@@ -107,7 +148,7 @@ def show_transactions(df: pd.DataFrame, collection):
             st.write(f"**Amount:** ₹{row['amount']}")
             st.write(f"**Notes:** {row['notes'] if row['notes'] else '-'}")
 
-            if row["friend"] in allowed_deleters:
+            if st.session_state.get("user") in allowed_deleters:
                 if st.button(f"❌ Delete", key=str(row['_id'])):
                     collection.delete_one({"_id": ObjectId(row["_id"])})
                     st.success("✅ Expense deleted!")
@@ -115,11 +156,53 @@ def show_transactions(df: pd.DataFrame, collection):
 
 
 # --------------------------
-# Main Execution
+# Export to PDF
+# --------------------------
+def export_pdf(df: pd.DataFrame):
+    if not HAS_REPORTLAB:
+        st.error("ReportLab not installed. Install with `pip install reportlab`")
+        return
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(200, height - 50, "Expense Report")
+
+    c.setFont("Helvetica", 12)
+    y = height - 100
+    for _, row in df.iterrows():
+        text = f"{row['date']} | {row['category']} | {row['friend']} | ₹{row['amount']} | {row['notes']}"
+        c.drawString(50, y, text)
+        y -= 20
+        if y < 50:
+            c.showPage()
+            y = height - 50
+
+    c.save()
+    buffer.seek(0)
+
+    st.download_button(
+        label="📄 Download PDF Report",
+        data=buffer,
+        file_name="expense_report.pdf",
+        mime="application/pdf"
+    )
+
+
+# --------------------------
+# Main
 # --------------------------
 def main():
     st.set_page_config(page_title="💰 Expense Tracker", page_icon="📊", layout="wide")
     st.title("💰 Expense Tracker")
+
+    # --- Login ---
+    login()
+    if "user" not in st.session_state:
+        st.warning("Please log in to continue.")
+        return
 
     collection = get_collection()
 
@@ -142,6 +225,9 @@ def main():
 
     # Show transactions
     show_transactions(df, collection)
+
+    # Export to PDF
+    export_pdf(df)
 
 
 if __name__ == "__main__":
