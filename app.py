@@ -191,6 +191,31 @@ def generate_individual_pdf_bytes(username: str) -> bytes:
     return generate_pdf_bytes(df, title=title)
 
 # --------------------------
+# New: Generate PDF for a friend (friend field)
+# --------------------------
+def generate_friend_pdf_bytes(friend_name: str) -> bytes:
+    """
+    Query expenses for the given friend name and return PDF bytes.
+    """
+    if not friend_name:
+        raise ValueError("friend_name required")
+
+    docs = list(collection.find({"friend": friend_name}))
+    if not docs:
+        empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])  # empty
+        title = f"Expense Report - Friend: {friend_name} (No records)"
+        return generate_pdf_bytes(empty_df, title=title)
+
+    df = pd.DataFrame(docs)
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"])
+
+    title = f"Expense Report - Friend: {friend_name}"
+    return generate_pdf_bytes(df, title=title)
+
+# --------------------------
 # Main App
 # --------------------------
 def show_app():
@@ -228,7 +253,7 @@ def show_app():
     # --------------------------
     # Expense Form
     # --------------------------
-    categories = ["Food", "Cinema", "Groceries", "Vegetables","Bill Payements", "Others"]
+    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
     grocery_subcategories = [
         "Vegetables",
         "Fruits",
@@ -376,6 +401,30 @@ def show_app():
                     st.download_button(f"⬇️ Download PDF for {selected_owner}", data=individual_pdf, file_name=filename, mime="application/pdf")
                 except Exception as e:
                     st.error(f"Failed to generate individual PDF: {e}")
+
+            # --------------------------
+            # New UI: Download per-friend PDF
+            # --------------------------
+            st.markdown("---")
+            st.subheader("👥 Download Friend's Expense Report")
+
+            # Build list of friends present in visible dataset.
+            # Admins get all friends from global data; users get friends only from their visible records.
+            friends_available = sorted(df_download['friend'].dropna().unique().tolist()) if 'friend' in df_download.columns else []
+
+            if st.session_state['is_admin']:
+                selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf") if friends_available else None
+            else:
+                # Regular user: allow selecting from friends they've recorded (in df_download)
+                selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf_user") if friends_available else None
+
+            if HAS_REPORTLAB and selected_friend:
+                try:
+                    friend_pdf = generate_friend_pdf_bytes(selected_friend)
+                    filename = f"expenses_friend_{selected_friend}.pdf"
+                    st.download_button(f"⬇️ Download PDF for friend: {selected_friend}", data=friend_pdf, file_name=filename, mime="application/pdf")
+                except Exception as e:
+                    st.error(f"Failed to generate friend PDF: {e}")
 
         except Exception as e:
             st.error(f"Failed to prepare download: {e}")
