@@ -130,14 +130,21 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
         raise RuntimeError("reportlab not available")
 
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20
+    )
     styles = getSampleStyleSheet()
     elems = []
 
     elems.append(Paragraph(title, styles["Title"]))
     elems.append(Spacer(1, 12))
     total = df["amount"].sum() if "amount" in df.columns else 0.0
-    elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["Normal"]))
+    elems.append(Paragraph(
+        f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        styles["Normal"]
+    ))
     elems.append(Spacer(1, 12))
 
     df_export = df.copy()
@@ -165,53 +172,21 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
-# New: Generate PDF for individual user
-# --------------------------
-def generate_individual_pdf_bytes(username: str) -> bytes:
-    """
-    Query expenses for the given username (owner) and return PDF bytes.
-    """
-    if not username:
-        raise ValueError("username required")
-
-    docs = list(collection.find({"owner": username}))
-    if not docs:
-        # return an empty PDF with a friendly message
-        empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])  # empty
-        title = f"Expense Report - {username} (No records)"
-        return generate_pdf_bytes(empty_df, title=title)
-
-    df = pd.DataFrame(docs)
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-    if "_id" in df.columns:
-        df = df.drop(columns=["_id"])
-
-    title = f"Expense Report - {username}"
-    return generate_pdf_bytes(df, title=title)
-
-# --------------------------
-# New: Generate PDF for a friend (friend field)
+# Generate PDF for a friend (friend field)
 # --------------------------
 def generate_friend_pdf_bytes(friend_name: str) -> bytes:
-    """
-    Query expenses for the given friend name and return PDF bytes.
-    """
     if not friend_name:
         raise ValueError("friend_name required")
-
     docs = list(collection.find({"friend": friend_name}))
     if not docs:
-        empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])  # empty
+        empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])
         title = f"Expense Report - Friend: {friend_name} (No records)"
         return generate_pdf_bytes(empty_df, title=title)
-
     df = pd.DataFrame(docs)
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
     if "_id" in df.columns:
         df = df.drop(columns=["_id"])
-
     title = f"Expense Report - Friend: {friend_name}"
     return generate_pdf_bytes(df, title=title)
 
@@ -236,9 +211,7 @@ def show_app():
                 st.success("Admin")
             st.button("Logout", on_click=logout)
 
-    # --------------------------
     # Show message if not logged in
-    # --------------------------
     if not st.session_state["authenticated"]:
         st.markdown(
             """
@@ -250,20 +223,11 @@ def show_app():
         )
         return  # stop further rendering until user logs in
 
-    # --------------------------
     # Expense Form
-    # --------------------------
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
     grocery_subcategories = [
-        "Vegetables",
-        "Fruits",
-        "Milk & Dairy",
-        "Rice & Grains",
-        "Lentils & Pulses",
-        "Spices & Masalas",
-        "Oil & Ghee",
-        "Snacks & Packaged Items",
-        "Bakery & Beverages",
+        "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
+        "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages",
         "Medical & Household Essentials"
     ]
     friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
@@ -299,9 +263,7 @@ def show_app():
             })
             st.success("✅ Expense saved successfully!")
 
-    # --------------------------
-    # Admin Controls (always visible to admin, even if no expenses yet)
-    # --------------------------
+    # Admin Controls
     if st.session_state["is_admin"]:
         st.markdown("---")
         st.subheader("⚙️ Admin Controls")
@@ -319,9 +281,7 @@ def show_app():
             collection.delete_many({})
             st.warning("⚠️ All expenses deleted by admin.")
 
-    # --------------------------
     # Show Expenses (Admin sees all; users see only their own)
-    # --------------------------
     if st.session_state["is_admin"]:
         data = list(collection.find())
     else:
@@ -368,9 +328,8 @@ def show_app():
         try:
             df_download = df.copy()
             if "_id" in df_download.columns:
-                df_download = df_download.drop(columns=["_id"]) 
+                df_download = df_download.drop(columns=["_id"])
 
-            # Global PDF (existing behavior)
             if HAS_REPORTLAB:
                 pdf_title = f"Expense Report - {st.session_state['username']}" if not st.session_state["is_admin"] else "Expense Report - Admin View"
                 pdf_bytes = generate_pdf_bytes(df_download, title=pdf_title)
@@ -379,43 +338,16 @@ def show_app():
                 st.info("PDF export requires 'reportlab' package.")
 
             # --------------------------
-            # New UI: Download individual user's PDF
-            # --------------------------
-            st.markdown("---")
-            st.subheader("👤 Download Individual's Expense Report")
-
-            # build list of owners available in the dataset
-            owners = sorted(df_download['owner'].unique().tolist()) if 'owner' in df_download.columns else []
-
-            # If admin, they can choose any owner; regular users can only choose themselves
-            if st.session_state['is_admin']:
-                selected_owner = st.selectbox("Select user", options=owners, key="select_owner_for_pdf") if owners else None
-            else:
-                selected_owner = st.session_state['username']
-                st.write(f"Generating report for: **{selected_owner}**")
-
-            if HAS_REPORTLAB and selected_owner:
-                try:
-                    individual_pdf = generate_individual_pdf_bytes(selected_owner)
-                    filename = f"expenses_{selected_owner}.pdf"
-                    st.download_button(f"⬇️ Download PDF for {selected_owner}", data=individual_pdf, file_name=filename, mime="application/pdf")
-                except Exception as e:
-                    st.error(f"Failed to generate individual PDF: {e}")
-
-            # --------------------------
-            # New UI: Download per-friend PDF
+            # Friend-based PDF export (active)
             # --------------------------
             st.markdown("---")
             st.subheader("👥 Download Friend's Expense Report")
 
-            # Build list of friends present in visible dataset.
-            # Admins get all friends from global data; users get friends only from their visible records.
             friends_available = sorted(df_download['friend'].dropna().unique().tolist()) if 'friend' in df_download.columns else []
 
             if st.session_state['is_admin']:
                 selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf") if friends_available else None
             else:
-                # Regular user: allow selecting from friends they've recorded (in df_download)
                 selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf_user") if friends_available else None
 
             if HAS_REPORTLAB and selected_friend:
