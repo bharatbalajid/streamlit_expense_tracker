@@ -165,6 +165,32 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return pdf_bytes
 
 # --------------------------
+# New: Generate PDF for individual user
+# --------------------------
+def generate_individual_pdf_bytes(username: str) -> bytes:
+    """
+    Query expenses for the given username (owner) and return PDF bytes.
+    """
+    if not username:
+        raise ValueError("username required")
+
+    docs = list(collection.find({"owner": username}))
+    if not docs:
+        # return an empty PDF with a friendly message
+        empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])  # empty
+        title = f"Expense Report - {username} (No records)"
+        return generate_pdf_bytes(empty_df, title=title)
+
+    df = pd.DataFrame(docs)
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"])
+
+    title = f"Expense Report - {username}"
+    return generate_pdf_bytes(df, title=title)
+
+# --------------------------
 # Main App
 # --------------------------
 def show_app():
@@ -317,13 +343,40 @@ def show_app():
         try:
             df_download = df.copy()
             if "_id" in df_download.columns:
-                df_download = df_download.drop(columns=["_id"])
+                df_download = df_download.drop(columns=["_id"]) 
+
+            # Global PDF (existing behavior)
             if HAS_REPORTLAB:
                 pdf_title = f"Expense Report - {st.session_state['username']}" if not st.session_state["is_admin"] else "Expense Report - Admin View"
                 pdf_bytes = generate_pdf_bytes(df_download, title=pdf_title)
                 st.download_button("⬇️ Download PDF (Visible Expenses)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
             else:
                 st.info("PDF export requires 'reportlab' package.")
+
+            # --------------------------
+            # New UI: Download individual user's PDF
+            # --------------------------
+            st.markdown("---")
+            st.subheader("👤 Download Individual's Expense Report")
+
+            # build list of owners available in the dataset
+            owners = sorted(df_download['owner'].unique().tolist()) if 'owner' in df_download.columns else []
+
+            # If admin, they can choose any owner; regular users can only choose themselves
+            if st.session_state['is_admin']:
+                selected_owner = st.selectbox("Select user", options=owners, key="select_owner_for_pdf") if owners else None
+            else:
+                selected_owner = st.session_state['username']
+                st.write(f"Generating report for: **{selected_owner}**")
+
+            if HAS_REPORTLAB and selected_owner:
+                try:
+                    individual_pdf = generate_individual_pdf_bytes(selected_owner)
+                    filename = f"expenses_{selected_owner}.pdf"
+                    st.download_button(f"⬇️ Download PDF for {selected_owner}", data=individual_pdf, file_name=filename, mime="application/pdf")
+                except Exception as e:
+                    st.error(f"Failed to generate individual PDF: {e}")
+
         except Exception as e:
             st.error(f"Failed to prepare download: {e}")
 
