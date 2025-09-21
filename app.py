@@ -228,7 +228,7 @@ def show_app():
     # --------------------------
     # Expense Form
     # --------------------------
-    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
+    categories = ["Food", "Cinema", "Groceries", "Vegetables","Bill Payements", "Others"]
     grocery_subcategories = [
         "Vegetables",
         "Fruits",
