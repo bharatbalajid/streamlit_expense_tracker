@@ -232,11 +232,12 @@ def show_app():
         return  # stop further rendering until user logs in
 
     # --- UI variables (categories/subcategories/friends) ---
-    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Bill Payment", "Others"]
+    # Note: "Medical & Household Essentials" removed from grocery subcategories.
+    # "Medical" added as a top-level category.
+    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Bill Payment", "Medical", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
-        "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages",
-        "Medical & Household Essentials"
+        "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"
     ]
     bill_payment_subcategories = [
         "CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"
@@ -252,26 +253,45 @@ def show_app():
         if chosen_cat == "Groceries":
             st.write("**Grocery Subcategory**")
             chosen_g_sub = st.selectbox("Choose Grocery Subcategory", grocery_subcategories, key="ui_grocery_subcat")
-            st.session_state["ui_subcategory"] = f"Groceries - {chosen_g_sub}"
+            try:
+                st.session_state["ui_subcategory"] = f"Groceries - {chosen_g_sub}"
+            except Exception:
+                # ignore session_state write failure to prevent app crash
+                pass
         elif chosen_cat == "Bill Payment":
             st.write("**Bill Payment Subcategory**")
             chosen_b_sub = st.selectbox("Choose Bill Payment Subcategory", bill_payment_subcategories, key="ui_bill_subcat")
-            st.session_state["ui_subcategory"] = f"Bill Payment - {chosen_b_sub}"
+            try:
+                st.session_state["ui_subcategory"] = f"Bill Payment - {chosen_b_sub}"
+            except Exception:
+                pass
         elif chosen_cat == "Others":
             custom_cat = st.text_input("Enter custom category", key="ui_custom_category")
-            st.session_state["ui_subcategory"] = custom_cat.strip() if custom_cat.strip() else "Others"
+            try:
+                st.session_state["ui_subcategory"] = custom_cat.strip() if custom_cat.strip() else "Others"
+            except Exception:
+                pass
         else:
-            # for simple categories (Food, Cinema, Vegetables, etc.)
-            st.session_state["ui_subcategory"] = chosen_cat
+            # for simple categories (Food, Cinema, Vegetables, Medical etc.)
+            try:
+                st.session_state["ui_subcategory"] = chosen_cat
+            except Exception:
+                pass
 
     with col_top_right:
         st.write("**Who Spent?**")
         chosen_friend = st.selectbox("Select Friend", options=friends, key="ui_friend")
         if chosen_friend == "Others":
             custom_friend = st.text_input("Enter custom friend name", key="ui_custom_friend")
-            st.session_state["ui_friend"] = custom_friend.strip() if custom_friend.strip() else "Others"
+            try:
+                st.session_state["ui_friend"] = custom_friend.strip() if custom_friend.strip() else "Others"
+            except Exception:
+                pass
         else:
-            st.session_state["ui_friend"] = chosen_friend
+            try:
+                st.session_state["ui_friend"] = chosen_friend
+            except Exception:
+                pass
 
     st.markdown("---")
 
@@ -297,9 +317,6 @@ def show_app():
                 "owner": st.session_state["username"]
             })
             st.success("✅ Expense saved successfully!")
-            # optional: clear form fields after submit
-            # st.session_state["expense_amount_form"] = 1.0
-            # st.session_state["expense_notes_form"] = ""
 
     # Admin Controls
     if st.session_state["is_admin"]:
