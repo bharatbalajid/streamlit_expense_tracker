@@ -51,7 +51,6 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 def log_action(action: str, actor: str, target: str = None, details: dict = None):
-    """Store admin/user actions in audit log"""
     entry = {
         "action": action,
         "actor": actor,
@@ -59,9 +58,12 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
         "details": details or {},
         "timestamp": datetime.utcnow(),
     }
-    audit_col.insert_one(entry)
+    try:
+        audit_col.insert_one(entry)
+    except Exception:
+        # do not break the app if logging fails
+        pass
 
-# Ensure super-admin exists from secrets
 def ensure_superadmin():
     secret_user = st.secrets.get("admin", {}).get("username")
     secret_pass = st.secrets.get("admin", {}).get("password")
@@ -122,9 +124,10 @@ def logout():
     st.session_state["_login_error"] = None
 
 # --------------------------
-# Admin Helpers
+# Admin helpers
 # --------------------------
 def create_user(username: str, password: str, role: str = "user"):
+    username = (username or "").strip()
     if not username or not password:
         st.error("Provide username and password.")
         return
@@ -176,136 +179,198 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     return buffer.getvalue()
 
 # --------------------------
+# Helper: visible data
+# --------------------------
+def get_visible_docs():
+    if st.session_state.get("is_admin"):
+        return list(collection.find())
+    else:
+        owner = st.session_state.get("username")
+        return list(collection.find({"owner": owner}))
+
+# --------------------------
 # Main App
 # --------------------------
 def show_app():
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar
+    # Sidebar: login/logout
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
             st.text_input("Username", key="login_user")
             st.text_input("Password", type="password", key="login_pwd")
-            st.button("Login", on_click=login)
+            st.button("Login", on_click=login, key="login_button")
             if st.session_state["_login_error"]:
                 st.error(st.session_state["_login_error"])
         else:
             st.write(f"User: **{st.session_state['username']}**")
             if st.session_state["is_admin"]:
                 st.success("Admin")
-            st.button("Logout", on_click=logout)
+            st.button("Logout", on_click=logout, key="logout_button")
 
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
         return
 
-    # Expense categories
+    # categories
     categories = ["Food", "Cinema", "Groceries", "Bill Payment", "Medical", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
     friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
 
-    # Category & Friend
+    # Category & Friend selection (unique keys)
     col1, col2 = st.columns([2, 1])
     with col1:
-        chosen_cat = st.selectbox("Expense Type", options=categories, key="ui_category")
+        chosen_cat = st.selectbox("Expense Type", options=categories, key="ui_category_key")
         if chosen_cat == "Groceries":
-            sub = st.selectbox("Grocery Subcategory", grocery_subcategories)
+            sub = st.selectbox("Grocery Subcategory", grocery_subcategories, key="ui_grocery_subcat_key")
             category_final = f"Groceries - {sub}"
         elif chosen_cat == "Bill Payment":
-            sub = st.selectbox("Bill Payment Subcategory", bill_payment_subcategories)
+            sub = st.selectbox("Bill Payment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
             category_final = f"Bill Payment - {sub}"
         elif chosen_cat == "Others":
-            custom = st.text_input("Custom category")
+            custom = st.text_input("Custom category", key="ui_custom_category_key")
             category_final = custom.strip() if custom else "Others"
         else:
             category_final = chosen_cat
     with col2:
-        chosen_friend = st.selectbox("Who Spent?", options=friends, key="ui_friend")
+        chosen_friend = st.selectbox("Who Spent?", options=friends, key="ui_friend_key")
         if chosen_friend == "Others":
-            custom_friend = st.text_input("Custom friend")
+            custom_friend = st.text_input("Custom friend", key="ui_custom_friend_key")
             friend_final = custom_friend.strip() if custom_friend else "Others"
         else:
             friend_final = chosen_friend
 
-    # Expense Form
-    with st.form("expense_form", clear_on_submit=True):
-        expense_date = st.date_input("Date", value=datetime.now().date())
-        amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0)
-        notes = st.text_area("Comments / Notes")
-        if st.form_submit_button("💾 Save Expense"):
+    st.markdown("---")
+
+    # Expense form (unique keys for inputs)
+    with st.form("expense_form_key", clear_on_submit=True):
+        expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_key")
+        amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_key")
+        notes = st.text_area("Comments / Notes", key="expense_notes_key")
+        if st.form_submit_button("💾 Save Expense", key="save_expense_key"):
             ts = datetime.combine(expense_date, datetime.min.time())
             owner = st.session_state["username"]
-            collection.insert_one({
-                "category": category_final,
-                "friend": friend_final,
-                "amount": float(amount),
-                "notes": notes,
-                "timestamp": ts,
-                "owner": owner
-            })
-            log_action("add_expense", owner, details={"category": category_final, "amount": amount})
-            st.success("✅ Expense saved successfully!")
+            try:
+                collection.insert_one({
+                    "category": category_final,
+                    "friend": friend_final,
+                    "amount": float(amount),
+                    "notes": notes,
+                    "timestamp": ts,
+                    "owner": owner
+                })
+                log_action("add_expense", owner, details={"category": category_final, "amount": float(amount)})
+                st.success("✅ Expense saved successfully!")
+            except Exception as e:
+                st.error(f"Failed to save expense: {e}")
 
     # Admin Controls
-    if st.session_state["is_admin"]:
+    if st.session_state.get("is_admin"):
+        st.markdown("---")
         st.subheader("⚙️ Admin Controls")
-        with st.expander("Create User"):
-            u = st.text_input("Username")
-            p = st.text_input("Password", type="password")
-            r = st.selectbox("Role", ["user", "admin"])
-            if st.button("Create User"):
-                create_user(u, p, r)
-        with st.expander("Reset Password"):
-            users_list = [u["username"] for u in users_col.find({}, {"username": 1}) if u["username"] != st.session_state["username"]]
-            target = st.selectbox("User", users_list) if users_list else None
-            new_pass = st.text_input("New password", type="password")
-            if st.button("Reset"):
-                if target and new_pass:
-                    users_col.update_one({"username": target}, {"$set": {"password_hash": hash_password(new_pass)}})
-                    log_action("reset_password", st.session_state["username"], target=target)
-                    st.success(f"Password for {target} reset.")
-        with st.expander("Delete User"):
-            users_list = [u["username"] for u in users_col.find({}, {"username": 1}) if u["username"] != st.session_state["username"]]
-            target = st.selectbox("User", users_list) if users_list else None
-            confirm = st.checkbox("Confirm delete user")
-            if st.button("🗑️ Delete User") and target and confirm:
-                users_col.delete_one({"username": target})
-                collection.delete_many({"owner": target})
-                log_action("delete_user", st.session_state["username"], target=target)
-                st.success(f"User {target} deleted.")
 
-        confirm_all = st.checkbox("Confirm delete ALL expenses")
-        if st.button("🔥 Delete All Expenses") and confirm_all:
+        # Create User
+        with st.expander("Create User", expanded=False):
+            cu_name = st.text_input("New username", key="create_username_key")
+            cu_pass = st.text_input("New password", type="password", key="create_password_key")
+            cu_role = st.selectbox("Role", ["user", "admin"], key="create_role_key")
+            if st.button("Create User", key="create_user_button"):
+                create_user(cu_name, cu_pass, cu_role)
+
+        # Reset Password (unique keys)
+        with st.expander("Reset Password", expanded=False):
+            users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
+            if users_list_reset:
+                tgt_reset = st.selectbox("Select user to reset", options=users_list_reset, key="reset_user_select_key")
+                new_pass = st.text_input("New password", type="password", key="reset_user_password_key")
+                if st.button("Reset Password", key="reset_user_button_key"):
+                    if not new_pass:
+                        st.error("Provide a new password.")
+                    else:
+                        users_col.update_one({"username": tgt_reset}, {"$set": {"password_hash": hash_password(new_pass)}})
+                        log_action("reset_password", st.session_state["username"], target=tgt_reset)
+                        st.success(f"Password for '{tgt_reset}' has been reset.")
+            else:
+                st.info("No other users available for reset.")
+
+        # Delete User (unique keys + confirm)
+        with st.expander("Delete User", expanded=False):
+            users_list_del = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"] and d["username"] != st.secrets.get("admin", {}).get("username")]
+            if users_list_del:
+                tgt_del = st.selectbox("Select user to delete", options=users_list_del, key="delete_user_select_key")
+                del_confirm = st.checkbox("I confirm deletion of this user and optionally their expenses", key="delete_user_confirm_key")
+                del_expenses_opt = st.checkbox("Also delete user's expenses", key="delete_user_expenses_opt_key")
+                if st.button("🗑️ Delete User", key="delete_user_button_key") and del_confirm:
+                    users_col.delete_one({"username": tgt_del})
+                    if del_expenses_opt:
+                        collection.delete_many({"owner": tgt_del})
+                    log_action("delete_user", st.session_state["username"], target=tgt_del, details={"deleted_expenses": bool(del_expenses_opt)})
+                    st.success(f"User '{tgt_del}' deleted.")
+            else:
+                st.info("No other users to delete.")
+
+        # Delete All Expenses (confirm)
+        st.markdown("#### Danger Zone")
+        del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="delete_all_confirm_key")
+        if st.button("🔥 Delete All Expenses", key="delete_all_button_key") and del_all_confirm:
             collection.delete_many({})
             log_action("delete_all_expenses", st.session_state["username"])
             st.warning("⚠️ All expenses deleted.")
 
-    # Show Expenses
-    docs = list(collection.find({} if st.session_state["is_admin"] else {"owner": st.session_state["username"]}))
+        # View Audit Logs (admin)
+        with st.expander("View Audit Logs", expanded=False):
+            logs = list(audit_col.find().sort("timestamp", -1).limit(200))
+            if logs:
+                logs_df = pd.DataFrame(logs)
+                if "_id" in logs_df.columns:
+                    logs_df["_id"] = logs_df["_id"].astype(str)
+                logs_df["timestamp"] = pd.to_datetime(logs_df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+                st.dataframe(logs_df)
+            else:
+                st.info("No audit logs yet.")
+
+    # ----------------------
+    # Show visible expenses
+    # ----------------------
+    docs = get_visible_docs()
     if docs:
         df = pd.DataFrame(docs)
-        df["_id"] = df["_id"].astype(str)
-        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
+        if "_id" in df.columns:
+            df["_id"] = df["_id"].astype(str)
+        if "timestamp" in df.columns:
+            try:
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
+            except Exception:
+                df["timestamp"] = df["timestamp"].astype(str)
+        st.subheader("📊 All Expenses (Visible to you)")
+        # show table
         st.dataframe(df)
 
-        # Delete selected (admin only)
-        if st.session_state["is_admin"]:
-            delete_ids = []
-            for _, r in df.iterrows():
-                if st.checkbox(f"Delete {r['_id']}", key=r["_id"]):
-                    delete_ids.append(r["_id"])
-            confirm_sel = st.checkbox("Confirm delete selected")
-            if st.button("🗑️ Delete Selected") and delete_ids and confirm_sel:
-                for did in delete_ids:
-                    collection.delete_one({"_id": ObjectId(did)})
-                log_action("delete_selected_expenses", st.session_state["username"], details={"ids": delete_ids})
-                st.success("Selected expenses deleted.")
+        # Admin deletion of selected expenses (unique keys per row)
+        if st.session_state.get("is_admin"):
+            st.markdown("---")
+            st.write("Delete individual expenses (admin)")
+            selected_for_delete = []
+            for idx, row in df.iterrows():
+                cb_key = f"del_cb_{row['_id']}"
+                if st.checkbox(f"Delete {row['timestamp']} | {row.get('category','')} | ₹{row.get('amount','')}", key=cb_key):
+                    selected_for_delete.append(row["_id"])
+            if selected_for_delete:
+                confirm_sel = st.checkbox("Confirm deletion of selected expenses", key="confirm_delete_selected_key")
+                if st.button("🗑️ Delete Selected Expenses", key="delete_selected_expenses_button_key") and confirm_sel:
+                    for did in selected_for_delete:
+                        try:
+                            collection.delete_one({"_id": ObjectId(did)})
+                        except Exception:
+                            collection.delete_one({"_id": did})
+                    log_action("delete_selected_expenses", st.session_state["username"], details={"ids": selected_for_delete})
+                    st.success("Selected expenses deleted.")
     else:
-        st.info("No expenses yet.")
+        st.info("No expenses to show.")
 
-# --------------------------
+# Entry
 if __name__ == "__main__":
     show_app()
