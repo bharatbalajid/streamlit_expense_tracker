@@ -6,8 +6,8 @@ from datetime import datetime
 from bson.objectid import ObjectId
 import io
 import hashlib
+import random
 import plotly.express as px
-import random  # added for tip rotation
 
 # --------------------------
 # Optional PDF generation (ReportLab)
@@ -25,35 +25,6 @@ except Exception:
 # Page config
 # --------------------------
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
-
-# --------------------------
-# Money-saving tips (20 examples)
-# --------------------------
-sample_tips = [
-    "🍲 Cook at home twice a week to save on food delivery.",
-    "💳 Pay your credit card bills on time to avoid late fees.",
-    "🛒 Make a grocery list before shopping to cut impulse buys.",
-    "🚶 Walk short distances instead of booking a cab to save money and stay fit.",
-    "📈 Track subscriptions — cancel unused ones to save monthly costs.",
-    "⚡ Turn off lights and appliances when not in use to lower electricity bills.",
-    "🚰 Carry a reusable water bottle instead of buying bottled water.",
-    "📚 Borrow books from a library instead of always buying new ones.",
-    "🧾 Review your monthly expenses and set a small savings target.",
-    "🎬 Opt for streaming plans you actually use — downgrade unused ones.",
-    "🍎 Buy seasonal fruits and veggies; they’re cheaper and fresher.",
-    "🚗 Carpool with friends or colleagues to reduce fuel costs.",
-    "📦 Avoid impulse online shopping by keeping items in cart for 24 hours.",
-    "💼 Pack lunch for work at least 3 days a week.",
-    "🏷️ Compare prices online before making big purchases.",
-    "👕 Wash clothes in cold water to save on electricity.",
-    "💡 Replace old bulbs with energy-efficient LEDs.",
-    "🎁 Plan gifts in advance to avoid last-minute expensive buys.",
-    "📊 Track daily expenses — awareness reduces overspending.",
-    "💵 Set aside ₹100 daily in a jar — small savings grow big!"
-]
-
-def get_random_tip():
-    return random.choice(sample_tips)
 
 # --------------------------
 # MongoDB Connection
@@ -91,7 +62,6 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
     try:
         audit_col.insert_one(entry)
     except Exception:
-        # do not break the app if logging fails
         pass
 
 def ensure_superadmin():
@@ -122,10 +92,6 @@ for k, default in {
     if k not in st.session_state:
         st.session_state[k] = default
 
-# initialize tip session value if not present
-if "current_tip" not in st.session_state:
-    st.session_state["current_tip"] = get_random_tip()
-
 # --------------------------
 # Authentication
 # --------------------------
@@ -135,12 +101,10 @@ def login():
     if not user or not pwd:
         st.session_state["_login_error"] = "Provide both username and password."
         return
-
     u = users_col.find_one({"username": user})
     if not u:
         st.session_state["_login_error"] = "Invalid username or password."
         return
-
     if u.get("password_hash") == hash_password(pwd):
         st.session_state["authenticated"] = True
         st.session_state["username"] = user
@@ -219,8 +183,31 @@ def get_visible_docs():
     if st.session_state.get("is_admin"):
         return list(collection.find())
     else:
-        owner = st.session_state.get("username")
-        return list(collection.find({"owner": owner}))
+        return list(collection.find({"owner": st.session_state.get("username")}))
+
+# --------------------------
+# Fun Tips (money + comedy)
+# --------------------------
+sample_tips = [
+    "🍲 Cook at home twice a week to save on food delivery.",
+    "💳 Pay your credit card bills on time to avoid late fees.",
+    "🛒 Make a grocery list before shopping to cut impulse buys.",
+    "😂 Don’t buy things you don’t need with money you don’t have to impress people you don’t like.",
+    "🚶 Walk short distances instead of booking a cab — free cardio included.",
+    "⚡ Turn off lights… unless you want your bill to sponsor the power company CEO’s vacation.",
+    "📚 Borrow books instead of buying. Unless you plan to open a library in your house.",
+    "😂 The best way to save money: don’t let your kids near Amazon with one-click checkout.",
+    "🎬 Downgrade unused subscriptions — Netflix won’t cry, I promise.",
+    "🍎 Buy seasonal fruits — cheaper, tastier, and no need for time travel to eat mangoes in December.",
+    "😂 Remember: the ATM is not a magical money printer — that’s the RBI’s job.",
+    "🚗 Carpool with friends — more laughs, less petrol.",
+    "😂 If you think nobody cares about your spending, try missing an EMI.",
+    "🏷️ Compare prices online before buying — regret has no return policy.",
+    "💵 Save ₹100 daily. In a year, that’s ₹36,500. In 10 years, you’ll still be broke if you buy iPhones every year 😂"
+]
+
+def get_random_tip():
+    return random.choice(sample_tips)
 
 # --------------------------
 # Main App
@@ -228,7 +215,7 @@ def get_visible_docs():
 def show_app():
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar: login/logout + tip
+    # Sidebar: login/logout
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
@@ -237,33 +224,40 @@ def show_app():
             st.button("Login", on_click=login, key="login_button")
             if st.session_state["_login_error"]:
                 st.error(st.session_state["_login_error"])
-
-            # --- Money-saving tip shown on login sidebar ---
-            st.markdown("---")
-            st.subheader("💡 Money Tip")
-            st.info(st.session_state["current_tip"], icon="💡")
-            if st.button("🔄 Refresh Tip", key="refresh_tip_key"):
-                # rotate tip and rerun so UI updates immediately
-                st.session_state["current_tip"] = get_random_tip()
-                st.experimental_rerun()
         else:
             st.write(f"User: **{st.session_state['username']}**")
             if st.session_state["is_admin"]:
                 st.success("Admin")
             st.button("Logout", on_click=logout, key="logout_button")
 
+    # Show login tips if not logged in
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
+        st.markdown("---")
+        st.subheader("💡 Money & Comedy Tip")
+
+        if "current_tip" not in st.session_state:
+            st.session_state["current_tip"] = get_random_tip()
+
+        st.markdown(
+            f"<div style='text-align:center; font-size:20px; color:#2E8B57;'>{st.session_state['current_tip']}</div>",
+            unsafe_allow_html=True,
+        )
+
+        if st.button("😂 Refresh Tip", key="refresh_tip_key"):
+            st.session_state["current_tip"] = get_random_tip()
+            st.rerun()
         return
 
-    # categories
+    # --------------------------
+    # Expense form & categories
+    # --------------------------
     categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Petrol", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
-    # Category & Friend selection (unique keys)
     col1, col2 = st.columns([2, 1])
     with col1:
         chosen_cat = st.selectbox("Expense Type", options=categories, key="ui_category_key")
@@ -288,7 +282,6 @@ def show_app():
 
     st.markdown("---")
 
-    # Expense form (unique keys for inputs)
     with st.form("expense_form_key", clear_on_submit=True):
         expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_key")
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_key")
@@ -310,12 +303,13 @@ def show_app():
             except Exception as e:
                 st.error(f"Failed to save expense: {e}")
 
+    # --------------------------
     # Admin Controls
+    # --------------------------
     if st.session_state.get("is_admin"):
         st.markdown("---")
         st.subheader("⚙️ Admin Controls")
 
-        # Create User
         with st.expander("Create User", expanded=False):
             cu_name = st.text_input("New username", key="create_username_key")
             cu_pass = st.text_input("New password", type="password", key="create_password_key")
@@ -323,9 +317,9 @@ def show_app():
             if st.button("Create User", key="create_user_button"):
                 create_user(cu_name, cu_pass, cu_role)
 
-        # Reset Password (unique keys)
         with st.expander("Reset Password", expanded=False):
-            users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
+            users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1})
+                                if d["username"] != st.session_state["username"]]
             if users_list_reset:
                 tgt_reset = st.selectbox("Select user to reset", options=users_list_reset, key="reset_user_select_key")
                 new_pass = st.text_input("New password", type="password", key="reset_user_password_key")
@@ -333,29 +327,32 @@ def show_app():
                     if not new_pass:
                         st.error("Provide a new password.")
                     else:
-                        users_col.update_one({"username": tgt_reset}, {"$set": {"password_hash": hash_password(new_pass)}})
+                        users_col.update_one({"username": tgt_reset},
+                                             {"$set": {"password_hash": hash_password(new_pass)}})
                         log_action("reset_password", st.session_state["username"], target=tgt_reset)
                         st.success(f"Password for '{tgt_reset}' has been reset.")
             else:
                 st.info("No other users available for reset.")
 
-        # Delete User (unique keys + confirm)
         with st.expander("Delete User", expanded=False):
-            users_list_del = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"] and d["username"] != st.secrets.get("admin", {}).get("username")]
+            users_list_del = [d["username"] for d in users_col.find({}, {"username": 1})
+                              if d["username"] != st.session_state["username"]
+                              and d["username"] != st.secrets.get("admin", {}).get("username")]
             if users_list_del:
                 tgt_del = st.selectbox("Select user to delete", options=users_list_del, key="delete_user_select_key")
-                del_confirm = st.checkbox("I confirm deletion of this user and optionally their expenses", key="delete_user_confirm_key")
+                del_confirm = st.checkbox("I confirm deletion of this user and optionally their expenses",
+                                          key="delete_user_confirm_key")
                 del_expenses_opt = st.checkbox("Also delete user's expenses", key="delete_user_expenses_opt_key")
                 if st.button("🗑️ Delete User", key="delete_user_button_key") and del_confirm:
                     users_col.delete_one({"username": tgt_del})
                     if del_expenses_opt:
                         collection.delete_many({"owner": tgt_del})
-                    log_action("delete_user", st.session_state["username"], target=tgt_del, details={"deleted_expenses": bool(del_expenses_opt)})
+                    log_action("delete_user", st.session_state["username"], target=tgt_del,
+                               details={"deleted_expenses": bool(del_expenses_opt)})
                     st.success(f"User '{tgt_del}' deleted.")
             else:
                 st.info("No other users to delete.")
 
-        # Delete All Expenses (confirm)
         st.markdown("#### Danger Zone")
         del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="delete_all_confirm_key")
         if st.button("🔥 Delete All Expenses", key="delete_all_button_key") and del_all_confirm:
@@ -363,7 +360,6 @@ def show_app():
             log_action("delete_all_expenses", st.session_state["username"])
             st.warning("⚠️ All expenses deleted.")
 
-        # View Audit Logs (admin)
         with st.expander("View Audit Logs", expanded=False):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
             if logs:
@@ -389,17 +385,16 @@ def show_app():
             except Exception:
                 df["timestamp"] = df["timestamp"].astype(str)
         st.subheader("📊 All Expenses (Visible to you)")
-        # show table
         st.dataframe(df)
 
-        # Admin deletion of selected expenses (unique keys per row)
         if st.session_state.get("is_admin"):
             st.markdown("---")
             st.write("Delete individual expenses (admin)")
             selected_for_delete = []
             for idx, row in df.iterrows():
                 cb_key = f"del_cb_{row['_id']}"
-                if st.checkbox(f"Delete {row['timestamp']} | {row.get('category','')} | ₹{row.get('amount','')}", key=cb_key):
+                if st.checkbox(f"Delete {row['timestamp']} | {row.get('category','')} | ₹{row.get('amount','')}",
+                               key=cb_key):
                     selected_for_delete.append(row["_id"])
             if selected_for_delete:
                 confirm_sel = st.checkbox("Confirm deletion of selected expenses", key="confirm_delete_selected_key")
@@ -409,7 +404,8 @@ def show_app():
                             collection.delete_one({"_id": ObjectId(did)})
                         except Exception:
                             collection.delete_one({"_id": did})
-                    log_action("delete_selected_expenses", st.session_state["username"], details={"ids": selected_for_delete})
+                    log_action("delete_selected_expenses", st.session_state["username"],
+                               details={"ids": selected_for_delete})
                     st.success("Selected expenses deleted.")
     else:
         st.info("No expenses to show.")
