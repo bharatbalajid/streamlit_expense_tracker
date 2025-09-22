@@ -236,20 +236,40 @@ def show_app():
     friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Srinath", "Others"]
 
     with st.form("expense_form", clear_on_submit=True):
+        # split into two columns for top row
         col1, col2 = st.columns(2)
+
+        # Left column: Category + (conditional) Subcategory / Custom category
         with col1:
             category = st.selectbox("Expense Type", categories, key="expense_category")
+
+            # Show grocery subcategory when Groceries selected
             if category == "Groceries":
-                subcat = st.selectbox("Grocery Subcategory", grocery_subcategories, key="expense_grocery_subcat")
-                category = f"Groceries - {subcat}"
+                st.markdown("**Grocery Subcategory**")
+                grocery_subcat = st.selectbox(
+                    "Select grocery subcategory",
+                    grocery_subcategories,
+                    key="expense_grocery_subcat_select"
+                )
+                category = f"Groceries - {grocery_subcat}"
+
+            # Show bill payment subcategory when Bill Payment selected
             elif category == "Bill Payment":
-                subcat = st.selectbox("Bill Payment Subcategory", bill_payment_subcategories, key="expense_bill_subcat")
-                category = f"Bill Payment - {subcat}"
+                st.markdown("**Bill Payment Subcategory**")
+                bill_subcat = st.selectbox(
+                    "Select bill payment subcategory",
+                    bill_payment_subcategories,
+                    key="expense_bill_subcat_select"
+                )
+                category = f"Bill Payment - {bill_subcat}"
+
+            # Custom category for Others
             elif category == "Others":
                 category_comment = st.text_input("Enter custom category", key="expense_custom_category")
                 if category_comment.strip():
                     category = category_comment
 
+        # Right column: Friend (and custom friend if Others)
         with col2:
             friend = st.selectbox("Who Spent?", friends, key="expense_friend")
             if friend == "Others":
@@ -257,16 +277,17 @@ def show_app():
                 if friend_comment.strip():
                     friend = friend_comment
 
-        # --- Date input only ---
+        # Put date on its own full-width row to avoid overlap with dropdowns
+        st.markdown("---")
         expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date")
 
+        # Amount and notes (full width)
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount")
         notes = st.text_area("Comments / Notes (optional)", key="expense_notes")
+
         submitted = st.form_submit_button("💾 Save Expense")
         if submitted:
-            # store as plain date
-            ts = expense_date
-
+            ts = expense_date  # date only
             collection.insert_one({
                 "category": category,
                 "friend": friend,
