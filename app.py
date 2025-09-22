@@ -218,7 +218,7 @@ def show_app():
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
-    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
+    friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
     # Category & Friend selection (unique keys)
     col1, col2 = st.columns([2, 1])
