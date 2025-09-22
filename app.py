@@ -7,6 +7,7 @@ from bson.objectid import ObjectId
 import io
 import hashlib
 import plotly.express as px
+import random  # added for tip rotation
 
 # --------------------------
 # Optional PDF generation (ReportLab)
@@ -24,6 +25,35 @@ except Exception:
 # Page config
 # --------------------------
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
+
+# --------------------------
+# Money-saving tips (20 examples)
+# --------------------------
+sample_tips = [
+    "🍲 Cook at home twice a week to save on food delivery.",
+    "💳 Pay your credit card bills on time to avoid late fees.",
+    "🛒 Make a grocery list before shopping to cut impulse buys.",
+    "🚶 Walk short distances instead of booking a cab to save money and stay fit.",
+    "📈 Track subscriptions — cancel unused ones to save monthly costs.",
+    "⚡ Turn off lights and appliances when not in use to lower electricity bills.",
+    "🚰 Carry a reusable water bottle instead of buying bottled water.",
+    "📚 Borrow books from a library instead of always buying new ones.",
+    "🧾 Review your monthly expenses and set a small savings target.",
+    "🎬 Opt for streaming plans you actually use — downgrade unused ones.",
+    "🍎 Buy seasonal fruits and veggies; they’re cheaper and fresher.",
+    "🚗 Carpool with friends or colleagues to reduce fuel costs.",
+    "📦 Avoid impulse online shopping by keeping items in cart for 24 hours.",
+    "💼 Pack lunch for work at least 3 days a week.",
+    "🏷️ Compare prices online before making big purchases.",
+    "👕 Wash clothes in cold water to save on electricity.",
+    "💡 Replace old bulbs with energy-efficient LEDs.",
+    "🎁 Plan gifts in advance to avoid last-minute expensive buys.",
+    "📊 Track daily expenses — awareness reduces overspending.",
+    "💵 Set aside ₹100 daily in a jar — small savings grow big!"
+]
+
+def get_random_tip():
+    return random.choice(sample_tips)
 
 # --------------------------
 # MongoDB Connection
@@ -91,6 +121,10 @@ for k, default in {
 }.items():
     if k not in st.session_state:
         st.session_state[k] = default
+
+# initialize tip session value if not present
+if "current_tip" not in st.session_state:
+    st.session_state["current_tip"] = get_random_tip()
 
 # --------------------------
 # Authentication
@@ -194,7 +228,7 @@ def get_visible_docs():
 def show_app():
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar: login/logout
+    # Sidebar: login/logout + tip
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
@@ -203,6 +237,15 @@ def show_app():
             st.button("Login", on_click=login, key="login_button")
             if st.session_state["_login_error"]:
                 st.error(st.session_state["_login_error"])
+
+            # --- Money-saving tip shown on login sidebar ---
+            st.markdown("---")
+            st.subheader("💡 Money Tip")
+            st.info(st.session_state["current_tip"], icon="💡")
+            if st.button("🔄 Refresh Tip", key="refresh_tip_key"):
+                # rotate tip and rerun so UI updates immediately
+                st.session_state["current_tip"] = get_random_tip()
+                st.experimental_rerun()
         else:
             st.write(f"User: **{st.session_state['username']}**")
             if st.session_state["is_admin"]:
