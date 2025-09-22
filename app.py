@@ -214,7 +214,7 @@ def show_app():
         return
 
     # categories
-    categories = ["Food", "Cinema", "Groceries", "Bill Payment", "Medical", "Others"]
+    categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Petrol", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
