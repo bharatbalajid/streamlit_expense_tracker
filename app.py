@@ -223,14 +223,17 @@ def show_app():
         )
         return  # stop further rendering until user logs in
 
-    # Expense Form (date only)
-    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
+    # Expense Form (date only) - with Bill Payment subcategories
+    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Bill Payment", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
         "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages",
         "Medical & Household Essentials"
     ]
-    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
+    bill_payment_subcategories = [
+        "CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"
+    ]
+    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Srinath", "Others"]
 
     with st.form("expense_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -239,10 +242,14 @@ def show_app():
             if category == "Groceries":
                 subcat = st.selectbox("Grocery Subcategory", grocery_subcategories, key="expense_grocery_subcat")
                 category = f"Groceries - {subcat}"
+            elif category == "Bill Payment":
+                subcat = st.selectbox("Bill Payment Subcategory", bill_payment_subcategories, key="expense_bill_subcat")
+                category = f"Bill Payment - {subcat}"
             elif category == "Others":
                 category_comment = st.text_input("Enter custom category", key="expense_custom_category")
                 if category_comment.strip():
                     category = category_comment
+
         with col2:
             friend = st.selectbox("Who Spent?", friends, key="expense_friend")
             if friend == "Others":
