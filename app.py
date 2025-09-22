@@ -234,7 +234,7 @@ def show_app():
     # --- UI variables (categories/subcategories/friends) ---
     # Note: "Medical & Household Essentials" removed from grocery subcategories.
     # "Medical" added as a top-level category.
-    categories = ["Food", "Cinema", "Groceries", "Vegetables", "Bill Payment", "Medical", "Others"]
+    categories = ["Food", "Cinema", "Groceries", "Bill Payment", "Medical", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
         "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"
