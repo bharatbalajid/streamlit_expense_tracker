@@ -223,7 +223,7 @@ def show_app():
         )
         return  # stop further rendering until user logs in
 
-    # Expense Form
+    # Expense Form (updated: manual date & time inputs)
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
@@ -249,16 +249,31 @@ def show_app():
                 friend_comment = st.text_input("Enter custom friend name", key="expense_custom_friend")
                 if friend_comment.strip():
                     friend = friend_comment
+
+        # --- New: manual date & time inputs (default to now) ---
+        # Date input (defaults to today)
+        expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date")
+        # Time input (defaults to current time without microseconds)
+        default_time = datetime.now().time().replace(microsecond=0)
+        expense_time = st.time_input("Time", value=default_time, key="expense_time")
+        # ------------------------------------------------------
+
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount")
         notes = st.text_area("Comments / Notes (optional)", key="expense_notes")
         submitted = st.form_submit_button("💾 Save Expense")
         if submitted:
+            try:
+                # combine date and time into a single datetime
+                ts = datetime.combine(expense_date, expense_time)
+            except Exception:
+                ts = datetime.now()
+
             collection.insert_one({
                 "category": category,
                 "friend": friend,
                 "amount": float(amount),
                 "notes": notes,
-                "timestamp": datetime.now(),
+                "timestamp": ts,
                 "owner": st.session_state["username"]
             })
             st.success("✅ Expense saved successfully!")
@@ -289,9 +304,18 @@ def show_app():
 
     if data:
         df = pd.DataFrame(data)
-        df["_id"] = df["_id"].astype(str)
+
+        # Normalize _id and timestamp for display
+        if "_id" in df.columns:
+            df["_id"] = df["_id"].astype(str)
         if "timestamp" in df.columns:
-            df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+            # if timestamps are strings or datetimes, this will coerce to datetimes
+            try:
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                # fallback: cast to string
+                df["timestamp"] = df["timestamp"].astype(str)
 
         st.subheader("📊 All Expenses (Manage)")
         delete_ids = []
