@@ -368,10 +368,29 @@ def show_app():
                 if create_submitted:
                     create_user(new_username, new_password, new_role)
 
+        # --- Reset user password (admin only) ---
+        with st.expander("Reset user password"):
+            # build user list excluding current admin and the configured super-admin
+            super_admin = st.secrets.get("admin", {}).get("username")
+            users_list = [u["username"] for u in users_col.find({}, {"username": 1})]
+            # exclude self and super-admin from reset list for safety
+            users_list = [u for u in users_list if u != st.session_state["username"] and u != super_admin]
+            if users_list:
+                user_to_reset = st.selectbox("Select user to reset password", users_list, key="reset_user_select")
+                new_pass = st.text_input("New password", type="password", key="reset_user_password")
+                if st.button("Reset Password", key="reset_user_btn"):
+                    if not new_pass:
+                        st.error("Provide a new password.")
+                    else:
+                        users_col.update_one({"username": user_to_reset}, {"$set": {"password_hash": hash_password(new_pass)}})
+                        st.success(f"Password for user '{user_to_reset}' has been reset.")
+            else:
+                st.info("No other users available for reset.")
+
         # Delete User option (admin only)
         with st.expander("Delete user"):
             users_list = [u["username"] for u in users_col.find({}, {"username": 1})]
-            users_list = [u for u in users_list if u != st.session_state["username"]]
+            users_list = [u for u in users_list if u != st.session_state["username"] and u != st.secrets.get("admin", {}).get("username")]
             if users_list:
                 user_to_delete = st.selectbox("Select user to delete", users_list, key="delete_user_select")
                 delete_user_confirm = st.checkbox("Also delete user's expenses", key="delete_user_expenses_confirm")
