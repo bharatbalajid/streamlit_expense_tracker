@@ -142,7 +142,7 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     elems.append(Spacer(1, 12))
     total = df["amount"].sum() if "amount" in df.columns else 0.0
     elems.append(Paragraph(
-        f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}",
         styles["Normal"]
     ))
     elems.append(Spacer(1, 12))
@@ -184,7 +184,7 @@ def generate_friend_pdf_bytes(friend_name: str) -> bytes:
         return generate_pdf_bytes(empty_df, title=title)
     df = pd.DataFrame(docs)
     if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
     if "_id" in df.columns:
         df = df.drop(columns=["_id"])
     title = f"Expense Report - Friend: {friend_name}"
@@ -223,7 +223,7 @@ def show_app():
         )
         return  # stop further rendering until user logs in
 
-    # Expense Form (updated: manual date & time inputs)
+    # Expense Form (date only)
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
@@ -250,23 +250,15 @@ def show_app():
                 if friend_comment.strip():
                     friend = friend_comment
 
-        # --- New: manual date & time inputs (default to now) ---
-        # Date input (defaults to today)
+        # --- Date input only ---
         expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date")
-        # Time input (defaults to current time without microseconds)
-        default_time = datetime.now().time().replace(microsecond=0)
-        expense_time = st.time_input("Time", value=default_time, key="expense_time")
-        # ------------------------------------------------------
 
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount")
         notes = st.text_area("Comments / Notes (optional)", key="expense_notes")
         submitted = st.form_submit_button("💾 Save Expense")
         if submitted:
-            try:
-                # combine date and time into a single datetime
-                ts = datetime.combine(expense_date, expense_time)
-            except Exception:
-                ts = datetime.now()
+            # store as plain date
+            ts = expense_date
 
             collection.insert_one({
                 "category": category,
@@ -292,6 +284,19 @@ def show_app():
                 if create_submitted:
                     create_user(new_username, new_password, new_role)
 
+        # --- Delete User option (admin only) ---
+        with st.expander("Delete user"):
+            # fetch usernames (exclude current admin)
+            users_list = [u["username"] for u in users_col.find({}, {"username": 1})]
+            users_list = [u for u in users_list if u != st.session_state["username"]]
+            if users_list:
+                user_to_delete = st.selectbox("Select user to delete", users_list, key="delete_user_select")
+                if st.button("🗑️ Delete User", key="delete_user_btn"):
+                    users_col.delete_one({"username": user_to_delete})
+                    st.success(f"User '{user_to_delete}' deleted successfully.")
+            else:
+                st.info("No other users to delete.")
+
         if st.button("🔥 Delete All Expenses (Admin)", key="delete_all_admin"):
             collection.delete_many({})
             st.warning("⚠️ All expenses deleted by admin.")
@@ -305,16 +310,12 @@ def show_app():
     if data:
         df = pd.DataFrame(data)
 
-        # Normalize _id and timestamp for display
         if "_id" in df.columns:
             df["_id"] = df["_id"].astype(str)
         if "timestamp" in df.columns:
-            # if timestamps are strings or datetimes, this will coerce to datetimes
             try:
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
-                df["timestamp"] = df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
             except Exception:
-                # fallback: cast to string
                 df["timestamp"] = df["timestamp"].astype(str)
 
         st.subheader("📊 All Expenses (Manage)")
@@ -329,14 +330,12 @@ def show_app():
             with c4: st.write(f"₹ {row.get('amount')}")
             with c5: st.write(row.get("notes") or "-")
             with c6:
-                # Only show delete checkbox to admins
                 if st.session_state["is_admin"]:
                     if st.checkbox("❌", key=checkbox_key):
                         delete_ids.append(row["_id"])
                 else:
-                    st.write("")  # placeholder to keep layout
+                    st.write("")
 
-        # Delete selected (admin only)
         if st.session_state["is_admin"]:
             if delete_ids and st.button("🗑️ Delete Selected", key="delete_selected_admin"):
                 for del_id in delete_ids:
@@ -348,7 +347,6 @@ def show_app():
         else:
             st.info("You cannot delete expenses. Contact admin for deletions.")
 
-        # Download: everyone can download the list they can view
         try:
             df_download = df.copy()
             if "_id" in df_download.columns:
@@ -361,9 +359,6 @@ def show_app():
             else:
                 st.info("PDF export requires 'reportlab' package.")
 
-            # --------------------------
-            # Friend-based PDF export (active)
-            # --------------------------
             st.markdown("---")
             st.subheader("👥 Download Friend's Expense Report")
 
