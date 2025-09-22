@@ -76,6 +76,14 @@ if "is_admin" not in st.session_state:
 if "_login_error" not in st.session_state:
     st.session_state["_login_error"] = None
 
+# initialize category/friend keys so they exist before first use
+if "ui_category" not in st.session_state:
+    st.session_state["ui_category"] = None
+if "ui_subcategory" not in st.session_state:
+    st.session_state["ui_subcategory"] = None
+if "ui_friend" not in st.session_state:
+    st.session_state["ui_friend"] = None
+
 # --------------------------
 # Authentication functions
 # --------------------------
@@ -223,7 +231,7 @@ def show_app():
         )
         return  # stop further rendering until user logs in
 
-    # Expense Form (date only) - with Bill Payment subcategories
+    # --- UI variables (categories/subcategories/friends) ---
     categories = ["Food", "Cinema", "Groceries", "Vegetables", "Bill Payment", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
@@ -233,70 +241,65 @@ def show_app():
     bill_payment_subcategories = [
         "CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"
     ]
-    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Srinath", "Others"]
+    friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
 
+    # --- Category & friend selection OUTSIDE the form so conditional widgets render immediately ---
+    col_top_left, col_top_right = st.columns([2, 1])
+    with col_top_left:
+        st.write("**Expense Type**")
+        chosen_cat = st.selectbox("Select Expense Type", options=categories, key="ui_category")
+        # show appropriate subcategory control immediately
+        if chosen_cat == "Groceries":
+            st.write("**Grocery Subcategory**")
+            chosen_g_sub = st.selectbox("Choose Grocery Subcategory", grocery_subcategories, key="ui_grocery_subcat")
+            st.session_state["ui_subcategory"] = f"Groceries - {chosen_g_sub}"
+        elif chosen_cat == "Bill Payment":
+            st.write("**Bill Payment Subcategory**")
+            chosen_b_sub = st.selectbox("Choose Bill Payment Subcategory", bill_payment_subcategories, key="ui_bill_subcat")
+            st.session_state["ui_subcategory"] = f"Bill Payment - {chosen_b_sub}"
+        elif chosen_cat == "Others":
+            custom_cat = st.text_input("Enter custom category", key="ui_custom_category")
+            st.session_state["ui_subcategory"] = custom_cat.strip() if custom_cat.strip() else "Others"
+        else:
+            # for simple categories (Food, Cinema, Vegetables, etc.)
+            st.session_state["ui_subcategory"] = chosen_cat
+
+    with col_top_right:
+        st.write("**Who Spent?**")
+        chosen_friend = st.selectbox("Select Friend", options=friends, key="ui_friend")
+        if chosen_friend == "Others":
+            custom_friend = st.text_input("Enter custom friend name", key="ui_custom_friend")
+            st.session_state["ui_friend"] = custom_friend.strip() if custom_friend.strip() else "Others"
+        else:
+            st.session_state["ui_friend"] = chosen_friend
+
+    st.markdown("---")
+
+    # --- Now the form contains the remaining inputs (date, amount, notes) ---
     with st.form("expense_form", clear_on_submit=True):
-        # split into two columns for top row
-        col1, col2 = st.columns(2)
-
-        # Left column: Category + (conditional) Subcategory / Custom category
-        with col1:
-            category = st.selectbox("Expense Type", categories, key="expense_category")
-
-            # Show grocery subcategory when Groceries selected
-            if category == "Groceries":
-                st.markdown("**Grocery Subcategory**")
-                grocery_subcat = st.selectbox(
-                    "Select grocery subcategory",
-                    grocery_subcategories,
-                    key="expense_grocery_subcat_select"
-                )
-                category = f"Groceries - {grocery_subcat}"
-
-            # Show bill payment subcategory when Bill Payment selected
-            elif category == "Bill Payment":
-                st.markdown("**Bill Payment Subcategory**")
-                bill_subcat = st.selectbox(
-                    "Select bill payment subcategory",
-                    bill_payment_subcategories,
-                    key="expense_bill_subcat_select"
-                )
-                category = f"Bill Payment - {bill_subcat}"
-
-            # Custom category for Others
-            elif category == "Others":
-                category_comment = st.text_input("Enter custom category", key="expense_custom_category")
-                if category_comment.strip():
-                    category = category_comment
-
-        # Right column: Friend (and custom friend if Others)
-        with col2:
-            friend = st.selectbox("Who Spent?", friends, key="expense_friend")
-            if friend == "Others":
-                friend_comment = st.text_input("Enter custom friend name", key="expense_custom_friend")
-                if friend_comment.strip():
-                    friend = friend_comment
-
-        # Put date on its own full-width row to avoid overlap with dropdowns
-        st.markdown("---")
-        expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date")
-
-        # Amount and notes (full width)
-        amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount")
-        notes = st.text_area("Comments / Notes (optional)", key="expense_notes")
+        expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_form")
+        amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_form")
+        notes = st.text_area("Comments / Notes (optional)", key="expense_notes_form")
 
         submitted = st.form_submit_button("💾 Save Expense")
         if submitted:
-            ts = expense_date  # date only
+            # read chosen category & friend from session_state (set above)
+            category_to_save = st.session_state.get("ui_subcategory") or st.session_state.get("ui_category")
+            friend_to_save = st.session_state.get("ui_friend") or st.session_state.get("ui_friend")
+
+            ts = expense_date  # store date only (no time)
             collection.insert_one({
-                "category": category,
-                "friend": friend,
+                "category": category_to_save,
+                "friend": friend_to_save,
                 "amount": float(amount),
                 "notes": notes,
                 "timestamp": ts,
                 "owner": st.session_state["username"]
             })
             st.success("✅ Expense saved successfully!")
+            # optional: clear form fields after submit
+            # st.session_state["expense_amount_form"] = 1.0
+            # st.session_state["expense_notes_form"] = ""
 
     # Admin Controls
     if st.session_state["is_admin"]:
@@ -312,9 +315,8 @@ def show_app():
                 if create_submitted:
                     create_user(new_username, new_password, new_role)
 
-        # --- Delete User option (admin only) ---
+        # Delete User option (admin only)
         with st.expander("Delete user"):
-            # fetch usernames (exclude current admin)
             users_list = [u["username"] for u in users_col.find({}, {"username": 1})]
             users_list = [u for u in users_list if u != st.session_state["username"]]
             if users_list:
