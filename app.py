@@ -239,7 +239,7 @@ def show_app():
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
         st.markdown("---")
-        st.subheader("🤣 Broke But Woke Tip")
+        st.subheader("😂 Expense Tracker ah Comedy Tracker aakuvom")
 
         if "current_tip" not in st.session_state:
             st.session_state["current_tip"] = get_random_tip()
