@@ -189,21 +189,26 @@ def get_visible_docs():
 # Fun Tips (money + comedy)
 # --------------------------
 sample_tips = [
-    "🍲 Cook at home twice a week to save on food delivery.",
-    "💳 Pay your credit card bills on time to avoid late fees.",
-    "🛒 Make a grocery list before shopping to cut impulse buys.",
-    "😂 Don’t buy things you don’t need with money you don’t have to impress people you don’t like.",
-    "🚶 Walk short distances instead of booking a cab — free cardio included.",
-    "⚡ Turn off lights… unless you want your bill to sponsor the power company CEO’s vacation.",
-    "📚 Borrow books instead of buying. Unless you plan to open a library in your house.",
-    "😂 The best way to save money: don’t let your kids near Amazon with one-click checkout.",
-    "🎬 Downgrade unused subscriptions — Netflix won’t cry, I promise.",
-    "🍎 Buy seasonal fruits — cheaper, tastier, and no need for time travel to eat mangoes in December.",
-    "😂 Remember: the ATM is not a magical money printer — that’s the RBI’s job.",
-    "🚗 Carpool with friends — more laughs, less petrol.",
-    "😂 If you think nobody cares about your spending, try missing an EMI.",
-    "🏷️ Compare prices online before buying — regret has no return policy.",
-    "💵 Save ₹100 daily. In a year, that’s ₹36,500. In 10 years, you’ll still be broke if you buy iPhones every year 😂"
+    "😂 ATM la cash illana, adhu unoda saving reminder da!",
+    "🍲 Veetla sambar sapidara cost = ₹50… hotel la order panna same sambar = ₹250. Comedy ah illa?",
+    "💳 Credit card swipe panna easy… pay panna hard. On time settle pannunga da!",
+    "⚡ AC full night on panna… morning la bill paartha odane cold ah varum.",
+    "📦 Online cart la 3 days vachutu decide pannunga… impulse buy ah nu theriyum.",
+    "🤣 Monthly budget pannunga… illa na budget dhan unakku comedy pannum.",
+    "🚗 Solo ride ku petrol burn pannadha… carpool pannunga, comedy + savings free bonus.",
+    "🍕 Daily pizza order panna… 1 varushathuku nee dhan oven aagiduva.",
+    "😂 EMI nu sollitu monthly kasa edukaraanga… naan dhan emi nu enga amma ku pocket money kuduthutu iruken.",
+    "💡 Light off pannunga… illa electric bill light speed la increase aagum.",
+    "📱 New phone vaanga aasai iruku… but nee last phone emi kooda pay panna mudikala.",
+    "🤣 Latte skip pannina billionaire aagave maate… but thanni bottle free ah fill pannunga.",
+    "🍎 Seasonal fruits vaangunga… offseason la vaanguna nee dhan season out aagiduva.",
+    "😂 Amazon ‘Deal of the Day’ la nee deal ah illa da… bank dhan winner.",
+    "👕 Same t-shirt 3 color vaangina savings illai… adhu comedy collection.",
+    "⚡ Fan off pannama veetla irundha… bill paartha odane nee fan aagiduva.",
+    "🤣 ‘Salary finished’ nu status podara munne… konjam save pannunga.",
+    "🍲 Biriyani craving ah veetla cook pannunga… savings + 2nd plate free.",
+    "😂 Gym ku ₹1000 kuduthutu auto la pogadha… walk pannunga free + fitness.",
+    "📊 Expense note pannunga… illa na expense dhan unakku note pannum.",
 ]
 
 def get_random_tip():
