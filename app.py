@@ -227,9 +227,9 @@ def show_app():
         if chosen_cat == "Groceries":
             sub = st.selectbox("Grocery Subcategory", grocery_subcategories, key="ui_grocery_subcat_key")
             category_final = f"Groceries - {sub}"
-        elif chosen_cat == "Bill Payment":
-            sub = st.selectbox("Bill Payment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
-            category_final = f"Bill Payment - {sub}"
+        elif chosen_cat == "Bill & Investment":
+            sub = st.selectbox("Bill & Investment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
+            category_final = f"Bill & Investment - {sub}"
         elif chosen_cat == "Others":
             custom = st.text_input("Custom category", key="ui_custom_category_key")
             category_final = custom.strip() if custom else "Others"
