@@ -76,7 +76,7 @@ if "is_admin" not in st.session_state:
 if "_login_error" not in st.session_state:
     st.session_state["_login_error"] = None
 
-# initialize category/friend keys so they exist before first use
+# initialize UI keys
 if "ui_category" not in st.session_state:
     st.session_state["ui_category"] = None
 if "ui_subcategory" not in st.session_state:
@@ -182,10 +182,13 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
 # --------------------------
 # Generate PDF for a friend (friend field)
 # --------------------------
-def generate_friend_pdf_bytes(friend_name: str) -> bytes:
+def generate_friend_pdf_bytes(friend_name: str, query_filter: dict) -> bytes:
+    # query_filter should already be the visibility filter (e.g. {"owner": username} for normal users)
     if not friend_name:
         raise ValueError("friend_name required")
-    docs = list(collection.find({"friend": friend_name}))
+    q = query_filter.copy()
+    q.update({"friend": friend_name})
+    docs = list(collection.find(q))
     if not docs:
         empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])
         title = f"Expense Report - Friend: {friend_name} (No records)"
@@ -197,6 +200,22 @@ def generate_friend_pdf_bytes(friend_name: str) -> bytes:
         df = df.drop(columns=["_id"])
     title = f"Expense Report - Friend: {friend_name}"
     return generate_pdf_bytes(df, title=title)
+
+# --------------------------
+# Helper: get visible data for current viewer
+# --------------------------
+def get_visible_data():
+    """
+    Returns list of documents visible to the current user.
+    Admin -> all documents
+    User  -> documents where owner == username
+    """
+    if st.session_state.get("is_admin"):
+        docs = list(collection.find())
+    else:
+        owner = st.session_state.get("username")
+        docs = list(collection.find({"owner": owner}))
+    return docs
 
 # --------------------------
 # Main App
@@ -232,8 +251,6 @@ def show_app():
         return  # stop further rendering until user logs in
 
     # --- UI variables (categories/subcategories/friends) ---
-    # Note: "Medical & Household Essentials" removed from grocery subcategories.
-    # "Medical" added as a top-level category.
     categories = ["Food", "Cinema", "Groceries", "Bill Payment", "Medical", "Others"]
     grocery_subcategories = [
         "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
@@ -242,6 +259,7 @@ def show_app():
     bill_payment_subcategories = [
         "CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"
     ]
+    # friends list for selection: show a limited set and allow custom names
     friends = ["Iyyappa", "Gokul", "Balaji", "Magesh", "Others"]
 
     # --- Category & friend selection OUTSIDE the form so conditional widgets render immediately ---
@@ -256,7 +274,6 @@ def show_app():
             try:
                 st.session_state["ui_subcategory"] = f"Groceries - {chosen_g_sub}"
             except Exception:
-                # ignore session_state write failure to prevent app crash
                 pass
         elif chosen_cat == "Bill Payment":
             st.write("**Bill Payment Subcategory**")
@@ -308,15 +325,34 @@ def show_app():
             friend_to_save = st.session_state.get("ui_friend") or st.session_state.get("ui_friend")
 
             ts = expense_date  # store date only (no time)
+            owner = st.session_state.get("username")
             collection.insert_one({
                 "category": category_to_save,
                 "friend": friend_to_save,
                 "amount": float(amount),
                 "notes": notes,
                 "timestamp": ts,
-                "owner": st.session_state["username"]
+                "owner": owner
             })
             st.success("✅ Expense saved successfully!")
+            # refresh visible data by rerunning (Streamlit will rerun automatically after interaction)
+
+    # ----------------------
+    # Fetch visible data (admin -> all, user -> own)
+    # ----------------------
+    docs = get_visible_data()
+    if docs:
+        df = pd.DataFrame(docs)
+        # normalize display columns
+        if "_id" in df.columns:
+            df["_id"] = df["_id"].astype(str)
+        if "timestamp" in df.columns:
+            try:
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
+            except Exception:
+                df["timestamp"] = df["timestamp"].astype(str)
+    else:
+        df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])
 
     # Admin Controls
     if st.session_state["is_admin"]:
@@ -338,8 +374,11 @@ def show_app():
             users_list = [u for u in users_list if u != st.session_state["username"]]
             if users_list:
                 user_to_delete = st.selectbox("Select user to delete", users_list, key="delete_user_select")
+                delete_user_confirm = st.checkbox("Also delete user's expenses", key="delete_user_expenses_confirm")
                 if st.button("🗑️ Delete User", key="delete_user_btn"):
                     users_col.delete_one({"username": user_to_delete})
+                    if delete_user_confirm:
+                        collection.delete_many({"owner": user_to_delete})
                     st.success(f"User '{user_to_delete}' deleted successfully.")
             else:
                 st.info("No other users to delete.")
@@ -348,26 +387,14 @@ def show_app():
             collection.delete_many({})
             st.warning("⚠️ All expenses deleted by admin.")
 
-    # Show Expenses (Admin sees all; users see only their own)
-    if st.session_state["is_admin"]:
-        data = list(collection.find())
+    # ----------------------
+    # Display expenses (only visible ones)
+    # ----------------------
+    st.subheader("📊 All Expenses (Visible to you)")
+    if df.empty:
+        st.info("No expenses yet. Add your first one above.")
     else:
-        data = list(collection.find({"owner": st.session_state["username"]}))
-
-    if data:
-        df = pd.DataFrame(data)
-
-        if "_id" in df.columns:
-            df["_id"] = df["_id"].astype(str)
-        if "timestamp" in df.columns:
-            try:
-                df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
-            except Exception:
-                df["timestamp"] = df["timestamp"].astype(str)
-
-        st.subheader("📊 All Expenses (Manage)")
         delete_ids = []
-
         for i, row in df.iterrows():
             checkbox_key = f"del_{row['_id']}"
             c1,c2,c3,c4,c5,c6 = st.columns([2,2,2,2,2,1])
@@ -377,11 +404,12 @@ def show_app():
             with c4: st.write(f"₹ {row.get('amount')}")
             with c5: st.write(row.get("notes") or "-")
             with c6:
+                # Only admin may delete rows
                 if st.session_state["is_admin"]:
                     if st.checkbox("❌", key=checkbox_key):
                         delete_ids.append(row["_id"])
                 else:
-                    st.write("")
+                    st.write("")  # placeholder
 
         if st.session_state["is_admin"]:
             if delete_ids and st.button("🗑️ Delete Selected", key="delete_selected_admin"):
@@ -391,9 +419,10 @@ def show_app():
                     except Exception:
                         collection.delete_one({"_id": del_id})
                 st.success("Deleted selected expenses.")
-        else:
-            st.info("You cannot delete expenses. Contact admin for deletions.")
 
+        # ----------------------
+        # Downloads & friend-based PDFs: use only visible data
+        # ----------------------
         try:
             df_download = df.copy()
             if "_id" in df_download.columns:
@@ -411,14 +440,16 @@ def show_app():
 
             friends_available = sorted(df_download['friend'].dropna().unique().tolist()) if 'friend' in df_download.columns else []
 
-            if st.session_state['is_admin']:
-                selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf") if friends_available else None
-            else:
-                selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf_user") if friends_available else None
+            selected_friend = st.selectbox("Select friend", options=friends_available, key="select_friend_for_pdf") if friends_available else None
 
             if HAS_REPORTLAB and selected_friend:
                 try:
-                    friend_pdf = generate_friend_pdf_bytes(selected_friend)
+                    # build the visibility filter
+                    if st.session_state.get("is_admin"):
+                        qfilter = {}
+                    else:
+                        qfilter = {"owner": st.session_state.get("username")}
+                    friend_pdf = generate_friend_pdf_bytes(selected_friend, qfilter)
                     filename = f"expenses_friend_{selected_friend}.pdf"
                     st.download_button(f"⬇️ Download PDF for friend: {selected_friend}", data=friend_pdf, file_name=filename, mime="application/pdf")
                 except Exception as e:
@@ -427,6 +458,9 @@ def show_app():
         except Exception as e:
             st.error(f"Failed to prepare download: {e}")
 
+        # ----------------------
+        # Metrics & charts computed only from visible data
+        # ----------------------
         st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}" if "amount" in df.columns else "₹ 0.00")
 
         cat_summary = df.groupby("category")["amount"].sum().reset_index() if "category" in df.columns and "amount" in df.columns else pd.DataFrame(columns=["category", "amount"])
@@ -457,9 +491,6 @@ def show_app():
             st.table(friend_summary.set_index("friend"))
         else:
             st.info("No friend summary yet.")
-
-    else:
-        st.info("No expenses yet. Add your first one above.")
 
 # --------------------------
 # App Entry
