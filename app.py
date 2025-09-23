@@ -129,16 +129,16 @@ def ensure_superadmin():
 ensure_superadmin()
 
 # --------------------------
-# Session defaults
+# Session defaults (admin UI keys included)
 # --------------------------
-for k, default in {
+defaults = {
     "authenticated": False,
     "username": None,
     "is_admin": False,
     "_login_error": None,
     "login_heading": None,
     "login_tip": None,
-    # admin UI keys (initialize to avoid KeyErrors)
+    # admin UI keys
     "create_user_username": "",
     "create_user_password": "",
     "create_user_role": "user",
@@ -149,7 +149,8 @@ for k, default in {
     "delete_user_expenses": False,
     "del_all_confirm": False,
     "confirm_delete_selected_key": False,
-} .items():
+}
+for k, default in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = default
 
@@ -588,16 +589,37 @@ def show_app():
             except Exception as e:
                 st.error(f"Failed to save expense: {e}")
 
-    # Admin Controls
+    # --------------------------
+    # Admin Controls (single reset icon clears admin forms)
+    # --------------------------
     if st.session_state.get("is_admin"):
         st.markdown("---")
-        st.subheader("⚙️ Admin Controls")
+
+        # Use a callback to safely mutate session_state (avoid mutating during render)
+        def reset_admin_forms():
+            st.session_state["create_user_username"] = ""
+            st.session_state["create_user_password"] = ""
+            st.session_state["create_user_role"] = "user"
+            st.session_state["reset_user_newpass"] = ""
+            st.session_state["delete_user_confirm"] = False
+            st.session_state["delete_user_expenses"] = False
+            st.session_state["del_all_confirm"] = False
+            st.session_state["confirm_delete_selected_key"] = False
+            # clear any del_cb_ keys (checkboxes generated for deletions)
+            keys_to_clear = [k for k in list(st.session_state.keys()) if str(k).startswith("del_cb_")]
+            for k in keys_to_clear:
+                st.session_state[k] = False
+
+        admin_col_left, admin_col_right = st.columns([9,1])
+        with admin_col_left:
+            st.subheader("⚙️ Admin Controls")
+        with admin_col_right:
+            st.button("🔁 Reset Admin Forms", key="reset_admin_forms_btn", help="Clear admin form inputs (does not modify DB)", on_click=reset_admin_forms)
 
         # -------------------
         # Create User
         # -------------------
         with st.expander("Create User"):
-            # keep session_state-backed defaults to allow Reset button to work
             cu_name = st.text_input("New username", key="create_user_username")
             cu_pass = st.text_input("New password", type="password", key="create_user_password")
             cu_role = st.selectbox("Role", ["user", "admin"], key="create_user_role")
@@ -606,8 +628,8 @@ def show_app():
                 if st.button("Create User", key="create_user_btn"):
                     create_user(cu_name, cu_pass, cu_role)
             with create_col2:
-                # Reset only clears the form inputs, not the database entries/names
-                if st.button("Reset Create Form", key="reset_create_form"):
+                if st.button("Clear Create Form", key="clear_create_form_btn"):
+                    # Use callback effect via session_state changes (safe)
                     st.session_state["create_user_username"] = ""
                     st.session_state["create_user_password"] = ""
                     st.session_state["create_user_role"] = "user"
@@ -618,7 +640,6 @@ def show_app():
         with st.expander("Reset Password"):
             users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
             if users_list_reset:
-                # default selection persists in session_state["reset_user_select"]
                 tgt_reset = st.selectbox("Select user to reset", options=users_list_reset, key="reset_user_select")
                 new_pass = st.text_input("New password", type="password", key="reset_user_newpass")
                 reset_col1, reset_col2 = st.columns([1,1])
@@ -630,7 +651,6 @@ def show_app():
                             reset_user_password(tgt_reset, new_pass)
                 with reset_col2:
                     if st.button("Clear Reset Form", key="clear_reset_form"):
-                        # keep dropdown list visible, clear password
                         st.session_state["reset_user_newpass"] = ""
             else:
                 st.info("No other users available for reset.")
@@ -651,11 +671,9 @@ def show_app():
                     if st.button("🗑️ Delete User", key="delete_user_btn") and del_confirm:
                         delete_user(tgt_del, delete_expenses=del_expenses_opt)
                 with del_col2:
-                    # Cancel/Reset — uncheck confirmations but keep the selected username visible
                     if st.button("Cancel / Reset Delete", key="cancel_delete_user"):
                         st.session_state["delete_user_confirm"] = False
                         st.session_state["delete_user_expenses"] = False
-                        # keep delete_user_select as-is (so the name remains visible)
             else:
                 st.info("No other users to delete.")
 
@@ -783,14 +801,12 @@ def show_app():
                         else:
                             st.success("Selected expenses deleted.")
                 with delsel_col2:
-                    # Reset selection: uncheck all generated checkboxes by clearing keys in session_state
                     if st.button("Cancel / Reset Selection", key="cancel_reset_selected"):
                         for did in selected_for_delete:
                             cbk = f"del_cb_{did}"
                             if cbk in st.session_state:
                                 st.session_state[cbk] = False
                         st.session_state["confirm_delete_selected_key"] = False
-            # end selected_for_delete handling
 
     else:
         st.info("No expenses to show.")
