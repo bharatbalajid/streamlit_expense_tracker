@@ -1,11 +1,12 @@
 # app.py
 """
-Full Expense Tracker with:
- - MongoDB backend (expenses, users, audit_logs)
- - Redis-backed session tokens (prevent logout on page refresh)
- - Tanglish comedy + money-saving tips on the login page (centered)
- - Admin controls (create/reset/delete users, delete expenses, view audit logs)
- - PDF export (optional: reportlab)
+Expense Tracker (full)
+- MongoDB backend: users, expenses, audit_logs
+- Redis-backed session tokens (persist across refresh)
+- Tanglish funny + money-saving tips on login page (centered)
+- Admin controls: create/reset/delete user, delete expenses, view audit logs
+- PDF export with reportlab (optional)
+- Uses new Streamlit query param API (st.query_params)
 """
 
 import os
@@ -22,13 +23,13 @@ import plotly.express as px
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# Redis
+# Redis should be installed for session persistence
 try:
     import redis
 except Exception:
     redis = None
 
-# Optional ReportLab (PDF)
+# Optional ReportLab
 HAS_REPORTLAB = True
 try:
     from reportlab.lib.pagesizes import A4, landscape
@@ -44,68 +45,35 @@ except Exception:
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 
 # --------------------------
-# Redis connection (try st.secrets, fallback to provided)
+# Require redis (we need persistence across refresh)
 # --------------------------
-# fallback url (use the one you provided or set to None). If you prefer not to hardcode, leave None.
-REDIS_FALLBACK = "redis://appuser:Balaji%238074@18.207.150.98:6379/0"
+if redis is None:
+    st.error("`redis` package not installed. Install it with `pip install redis` and restart the app.")
+    st.stop()
 
+# --------------------------
+# Redis connection (from secrets or env)
+# --------------------------
 REDIS_URL = None
 if st.secrets and st.secrets.get("redis", {}).get("url"):
     REDIS_URL = st.secrets.get("redis", {}).get("url")
 else:
-    REDIS_URL = os.environ.get("REDIS_URL") or REDIS_FALLBACK
+    REDIS_URL = os.environ.get("REDIS_URL")  # optional env fallback
 
-redis_client = None
-if REDIS_URL and redis:
-    try:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    except Exception as e:
-        st.warning(f"Warning: Redis not available ({e}). Sessions will be stored in memory only.")
-        redis_client = None
-else:
-    if not redis:
-        st.warning("redis package not installed; install 'redis' to enable Redis-backed sessions.")
-    else:
-        st.info("Redis URL not configured; using in-memory session only.")
+if not REDIS_URL:
+    st.error("Redis URL not configured. Add it to .streamlit/secrets.toml under [redis] url or set REDIS_URL env var.")
+    st.stop()
 
-# Redis helpers
-def generate_token() -> str:
-    return uuid.uuid4().hex
-
-def store_token_in_redis(token: str, username: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
-    if not redis_client:
-        return False
-    try:
-        return redis_client.setex(f"session:{token}", ttl_seconds, username)
-    except Exception:
-        return False
-
-def get_username_from_token(token: str) -> Optional[str]:
-    if not redis_client or not token:
-        return None
-    try:
-        return redis_client.get(f"session:{token}")
-    except Exception:
-        return None
-
-def delete_token(token: str) -> bool:
-    if not redis_client or not token:
-        return False
-    try:
-        return bool(redis_client.delete(f"session:{token}"))
-    except Exception:
-        return False
-
-def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
-    if not redis_client or not token:
-        return False
-    try:
-        return redis_client.expire(f"session:{token}", ttl_seconds)
-    except Exception:
-        return False
+try:
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    # quick test
+    redis_client.ping()
+except Exception as e:
+    st.error(f"Failed to connect to Redis: {e}")
+    st.stop()
 
 # --------------------------
-# MongoDB connection (from secrets or env)
+# MongoDB connection
 # --------------------------
 if st.secrets and st.secrets.get("mongo", {}).get("uri"):
     MONGO_URI = st.secrets.get("mongo", {}).get("uri")
@@ -127,12 +95,11 @@ users_col = db["users"]
 audit_col = db["audit_logs"]
 
 # --------------------------
-# Security helpers
+# Helpers
 # --------------------------
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
-# Audit logging
 def log_action(action: str, actor: str, target: str = None, details: dict = None):
     try:
         audit_col.insert_one({
@@ -143,18 +110,17 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
             "timestamp": datetime.utcnow()
         })
     except Exception:
-        # Avoid raising exceptions from audit logging
+        # never break app because audit failed
         pass
 
-# Ensure superadmin from secrets
+# ensure superadmin from secrets
 def ensure_superadmin():
     if not st.secrets:
         return
     secret_user = st.secrets.get("admin", {}).get("username")
     secret_pass = st.secrets.get("admin", {}).get("password")
     if secret_user and secret_pass:
-        existing = users_col.find_one({"username": secret_user})
-        if not existing:
+        if not users_col.find_one({"username": secret_user}):
             users_col.insert_one({
                 "username": secret_user,
                 "password_hash": hash_password(secret_pass),
@@ -166,7 +132,7 @@ def ensure_superadmin():
 ensure_superadmin()
 
 # --------------------------
-# Session defaults (Streamlit in-memory)
+# Session defaults
 # --------------------------
 for k, default in {
     "authenticated": False,
@@ -180,7 +146,7 @@ for k, default in {
         st.session_state[k] = default
 
 # --------------------------
-# Tanglish headings & tips (funny + useful)
+# Tanglish headings & tips
 # --------------------------
 tip_headings = [
     "😂 Kasa Save Panra Comedy Scene",
@@ -190,107 +156,124 @@ tip_headings = [
     "😅 Salary Vanthuruchu… Aana Enga?",
     "🤑 Budget Scene ku Punch Dialogue",
     "📉 Spend Pannadha… Laugh Pannu Da",
-    "⚡ Current Bill la Shock Adikama Trick",
-    "🤣 Sothappal ah Savings ah Mathura Tip",
-    "😂 Expense Tracker ah Comedy Tracker aakuvom"
 ]
 
 sample_tips = [
     "😂 ATM la cash illana, adhu unoda saving reminder da!",
-    "🍲 Veetla sambar sapidara cost = ₹50… hotel la order panna same sambar = ₹250. Comedy ah illa?",
-    "💳 Credit card swipe panna easy… pay panna hard. On time settle pannunga da!",
-    "⚡ AC full night on panna… morning la bill paartha odane shock aagiduva.",
-    "📦 Online cart la 24 hours vacha consider pannitu purchase pannunga — impulse save aagum.",
-    "🤣 Monthly budget panna, illa na budget dhan unakku comedy pannum.",
-    "🚗 Solo ride ku petrol burn pannadha… carpool pannunga, comedy + savings free!",
-    "🍕 Daily pizza order panna… 1 varushathuku nee dhan oven vanganum nu sollanum.",
-    "😂 EMI sollitu monthly kasa edukaraanga… bank dhan final winner.",
-    "💡 Light off pannunga da — illa electric bill ku keta question varum.",
-    "📱 New phone aasai iruku… but last phone EMI glass ela nu check pannu.",
-    "🤣 Latte skip pannina millionaire aagave maate… but pocket full ah irukum.",
-    "🍎 Seasonal fruits vaangunga — cheaper and tasty.",
-    "😂 Amazon deal paartha purchase panna munnaale 24hr think pannunga.",
-    "👕 Same t-shirt 3 colors purchase panna unnecessary ah irukum.",
-    "⚡ Fan off pannama irundha… bill paartha odane nee fan aagiduva.",
-    "🤣 ‘Salary finished’ nu status podara munne… konjam save pannunga.",
-    "🍲 Biriyani craving ah veetla cook pannunga — savings + second plate!",
-    "😂 Gym ku membership irundalum, kadayila auto eduthu pogadha — walk free!",
-    "📊 Daily expense note panni paarunga — awareness saves cash."
+    "🍲 Veetla sambar ₹50… hotel la same sambar ₹250. Comedy ah illa?",
+    "💳 Credit card swipe easy, pay panna hard — ontime pay pannunga!",
+    "⚡ AC full night on panna — morning bill paartha shock guaranteed.",
+    "📦 Online cart la 24 hrs vacha think pannunga — impulse buy avoid.",
+    "🤣 Monthly budget panna, illa na budget dhan unga comedy pannum.",
+    "🚗 Carpool pannunga — petrol save + friends' jokes included.",
+    "🍕 Daily pizza stop panna — 1 year la oven vanganum nu sollanum.",
+    "💡 Light off pannunga da — electric bill ku break poda.",
+    "📊 Expense note panni paarunga — small leaks big loss."
 ]
 
 def get_random_heading_and_tip():
     return random.choice(tip_headings), random.choice(sample_tips)
 
 # --------------------------
-# Redis + session helpers integrated with Streamlit
+# Redis session helpers (use st.query_params)
 # --------------------------
-def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 * 4) -> Optional[str]:
-    """
-    Create token, store in Redis (if available), and set token in URL so refresh persists.
-    Returns token if created, else None.
-    """
-    if not redis_client:
-        return None
-    token = generate_token()
+def generate_token() -> str:
+    return uuid.uuid4().hex
+
+def store_token_in_redis(token: str, username: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
     try:
-        store_token_in_redis(token, username, ttl_seconds)
-        st.experimental_set_query_params(session_token=token)
-        return token
+        return redis_client.setex(f"session:{token}", ttl_seconds, username)
+    except Exception:
+        return False
+
+def get_username_from_token(token: str) -> Optional[str]:
+    try:
+        return redis_client.get(f"session:{token}")
     except Exception:
         return None
 
+def delete_token(token: str) -> bool:
+    try:
+        return bool(redis_client.delete(f"session:{token}"))
+    except Exception:
+        return False
+
+def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
+    try:
+        return redis_client.expire(f"session:{token}", ttl_seconds)
+    except Exception:
+        return False
+
+def set_query_token(token: str):
+    """
+    Set session_token in st.query_params. Use mapping of single value (string).
+    st.query_params accepts mapping-like assignments.
+    """
+    # st.query_params can be assigned a dict-like mapping of strings or lists.
+    st.query_params.update({"session_token": token})
+
+def clear_query_params():
+    # Clear all query params
+    st.query_params.clear()
+
+def read_token_from_query() -> Optional[str]:
+    # st.query_params.get returns value or list; normalize to string
+    val = st.query_params.get("session_token", None)
+    if val is None:
+        return None
+    # If returned as list or str
+    if isinstance(val, list):
+        return val[0] if val else None
+    return val
+
+# --------------------------
+# Auth functions
+# --------------------------
+def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 * 4) -> Optional[str]:
+    token = generate_token()
+    ok = store_token_in_redis(token, username, ttl_seconds)
+    if ok:
+        set_query_token(token)
+        return token
+    return None
+
 def restore_session_from_url_token():
-    """
-    On app start, look for session_token in URL and restore session if Redis has it.
-    """
-    params = st.experimental_get_query_params()
-    token = params.get("session_token", [None])[0] if params else None
+    token = read_token_from_query()
     if token and not st.session_state.get("authenticated"):
         username = get_username_from_token(token)
         if username:
+            # restore session_state
             st.session_state["authenticated"] = True
             st.session_state["username"] = username
             u = users_col.find_one({"username": username})
             st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
 
 def clear_url_token_and_redis():
-    """
-    Remove session token from Redis & clear URL query params.
-    """
-    params = st.experimental_get_query_params()
-    token = params.get("session_token", [None])[0] if params else None
+    token = read_token_from_query()
     if token:
         try:
             delete_token(token)
         except Exception:
             pass
-    st.experimental_set_query_params()
+    clear_query_params()
 
-# --------------------------
-# Authentication functions
-# --------------------------
 def login():
     user = st.session_state.get("login_user", "").strip()
     pwd = st.session_state.get("login_pwd", "")
     if not user or not pwd:
         st.session_state["_login_error"] = "Provide both username and password."
         return
-
     u = users_col.find_one({"username": user})
     if not u:
         st.session_state["_login_error"] = "Invalid username or password."
         return
-
     if u.get("password_hash") == hash_password(pwd):
         st.session_state["authenticated"] = True
         st.session_state["username"] = user
         st.session_state["is_admin"] = (u.get("role") == "admin")
         st.session_state["_login_error"] = None
-        # create Redis token and set it in URL (if Redis configured)
-        try:
-            create_redis_session_and_set_url(user)
-        except Exception:
-            pass
+        # create redis session and set query param
+        create_redis_session_and_set_url(user)
         log_action("login", user)
     else:
         st.session_state["_login_error"] = "Invalid username or password."
@@ -346,7 +329,7 @@ def delete_user(target_username: str, delete_expenses: bool = False):
     st.success(f"User '{target_username}' deleted.")
 
 # --------------------------
-# PDF export helpers (ReportLab)
+# PDF helpers
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     if not HAS_REPORTLAB:
@@ -399,24 +382,25 @@ def generate_friend_pdf_bytes(friend_name: str) -> bytes:
     return generate_pdf_bytes(df, title=title)
 
 # --------------------------
-# Visible docs helper
+# Visible docs
 # --------------------------
 def get_visible_docs():
     if st.session_state.get("is_admin"):
         return list(collection.find())
     else:
-        return list(collection.find({"owner": st.session_state.get("username")}))
+        owner = st.session_state.get("username")
+        return list(collection.find({"owner": owner}))
 
 # --------------------------
-# Main app UI
+# Main UI
 # --------------------------
 def show_app():
-    # Try to restore from Redis token in URL (if exists)
+    # restore session from redis token in query params if present
     restore_session_from_url_token()
 
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar - login/logout
+    # Sidebar: Login / Logout
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
@@ -431,12 +415,11 @@ def show_app():
                 st.success("Admin")
             st.button("Logout", on_click=logout, key="logout_button")
 
-    # If not authenticated -> centered Tanglish heading + tip
+    # If not authenticated: show centered Tanglish tip & heading
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
         st.markdown("---")
 
-        # initialize session-stored heading & tip if not set
         if not st.session_state.get("login_heading") or not st.session_state.get("login_tip"):
             h, t = get_random_heading_and_tip()
             st.session_state["login_heading"] = h
@@ -453,13 +436,10 @@ def show_app():
 
         return
 
-    # Authenticated: show expense form etc.
-    # Categories and subcategories
+    # Authenticated UI: expense form, admin controls, listing
     categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Petrol", "Others"]
-    grocery_subcategories = [
-        "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
-        "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"
-    ]
+    grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
+                             "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
@@ -487,7 +467,6 @@ def show_app():
 
     st.markdown("---")
 
-    # Expense entry form
     with st.form("expense_form", clear_on_submit=True):
         expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_key")
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_key")
@@ -504,9 +483,8 @@ def show_app():
                     "timestamp": ts,
                     "owner": owner
                 })
-                # refresh token TTL on activity (sliding expiration)
-                params = st.experimental_get_query_params()
-                token = params.get("session_token", [None])[0] if params else None
+                # extend token TTL when user is active
+                token = read_token_from_query()
                 if token:
                     refresh_token_ttl(token)
                 log_action("add_expense", owner, details={"category": category_final, "amount": float(amount)})
@@ -519,7 +497,6 @@ def show_app():
         st.markdown("---")
         st.subheader("⚙️ Admin Controls")
 
-        # Create User
         with st.expander("Create User"):
             cu_name = st.text_input("New username", key="create_user_username")
             cu_pass = st.text_input("New password", type="password", key="create_user_password")
@@ -527,7 +504,6 @@ def show_app():
             if st.button("Create User", key="create_user_btn"):
                 create_user(cu_name, cu_pass, cu_role)
 
-        # Reset Password
         with st.expander("Reset Password"):
             users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
             if users_list_reset:
@@ -541,7 +517,6 @@ def show_app():
             else:
                 st.info("No other users available for reset.")
 
-        # Delete User
         with st.expander("Delete User"):
             users_list_del = [d["username"] for d in users_col.find({}, {"username": 1})
                               if d["username"] != st.session_state["username"]
@@ -555,7 +530,6 @@ def show_app():
             else:
                 st.info("No other users to delete.")
 
-        # Delete all expenses (danger)
         st.markdown("#### Danger Zone")
         del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="del_all_confirm")
         if st.button("🔥 Delete All Expenses", key="delete_all_btn") and del_all_confirm:
@@ -563,7 +537,6 @@ def show_app():
             log_action("delete_all_expenses", st.session_state["username"])
             st.warning("⚠️ All expenses deleted.")
 
-        # Audit logs
         with st.expander("View Audit Logs"):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
             if logs:
@@ -592,7 +565,7 @@ def show_app():
         st.subheader("📊 All Expenses (Visible to you)")
         st.dataframe(df)
 
-        # Download PDF (visible)
+        # PDF download
         try:
             df_download = df.copy()
             if "_id" in df_download.columns:
@@ -660,7 +633,7 @@ def show_app():
         st.info("No expenses to show.")
 
 # --------------------------
-# Entry
+# Run
 # --------------------------
 if __name__ == "__main__":
     show_app()
