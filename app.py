@@ -320,7 +320,6 @@ def logout():
     user = st.session_state.get("username")
     log_action("logout", user)
     # delete cookie and remove redis token (if present in query)
-    # attempt to read token from cookie via client: inject JS to delete cookie and then clear query param server-side
     st.components.v1.html("""
     <script>
       document.cookie = "session_token=; path=/; max-age=0;";
@@ -328,7 +327,6 @@ def logout():
       setTimeout(function(){ window.location.href = window.location.pathname; }, 200);
     </script>
     """, height=80)
-    # also try to clear server-side token if present in query params
     try:
         clear_url_token_and_redis()
     except Exception:
@@ -362,7 +360,10 @@ def reset_user_password(target_username: str, new_password: str):
     if not target_username or not new_password:
         st.error("Provide target user and new password.")
         return
-    users_col.update_one({"username": target_username}, {"$set": {"password_hash": hash_password(new_password)}})
+    result = users_col.update_one({"username": target_username}, {"$set": {"password_hash": hash_password(new_password)}})
+    if result.matched_count == 0:
+        st.warning(f"No user record found for '{target_username}'.")
+        return
     log_action("reset_password", st.session_state.get("username"), target=target_username)
     st.success(f"Password for '{target_username}' has been reset.")
 
@@ -370,11 +371,32 @@ def delete_user(target_username: str, delete_expenses: bool = False):
     if not target_username:
         st.error("Select a user to delete.")
         return
-    users_col.delete_one({"username": target_username})
+
+    # delete user
+    result = users_col.delete_one({"username": target_username})
+    # delete expenses optionally
+    exp_result = None
     if delete_expenses:
-        collection.delete_many({"owner": target_username})
+        exp_result = collection.delete_many({"owner": target_username})
+
+    if result.deleted_count == 0:
+        st.warning(f"No user record found for '{target_username}'.")
+        # If user not found but delete_expenses was requested, still report on expense deletions
+        if delete_expenses:
+            if exp_result and exp_result.deleted_count > 0:
+                st.info(f"User not found, but {exp_result.deleted_count} expense(s) owned by '{target_username}' were deleted.")
+                log_action("delete_user_expenses_only", st.session_state.get("username"), target=target_username, details={"deleted_expenses": exp_result.deleted_count})
+        return
+
+    # success path
+    if exp_result and exp_result.deleted_count == 0 and delete_expenses:
+        st.info(f"User '{target_username}' deleted, but no expenses were found for that user.")
+    elif exp_result and exp_result.deleted_count > 0:
+        st.success(f"User '{target_username}' and {exp_result.deleted_count} expense(s) deleted.")
+    else:
+        st.success(f"User '{target_username}' deleted.")
+
     log_action("delete_user", st.session_state.get("username"), target=target_username, details={"deleted_expenses": delete_expenses})
-    st.success(f"User '{target_username}' deleted.")
 
 # --------------------------
 # PDF helpers
@@ -550,10 +572,7 @@ def show_app():
                 })
                 # extend token TTL when user is active (try both cookie and query)
                 token = read_token_from_query()
-                if not token:
-                    # attempt to read token from cookie by asking browser to put it into query param (reader will do that on next run)
-                    pass
-                else:
+                if token:
                     refresh_token_ttl(token)
                 log_action("add_expense", owner, details={"category": category_final, "amount": float(amount)})
                 st.success("✅ Expense saved successfully!")
@@ -601,9 +620,12 @@ def show_app():
         st.markdown("#### Danger Zone")
         del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="del_all_confirm")
         if st.button("🔥 Delete All Expenses", key="delete_all_btn") and del_all_confirm:
-            collection.delete_many({})
-            log_action("delete_all_expenses", st.session_state["username"])
-            st.warning("⚠️ All expenses deleted.")
+            result = collection.delete_many({})
+            if result.deleted_count == 0:
+                st.info("No expense records found to delete.")
+            else:
+                log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
+                st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
 
         with st.expander("View Audit Logs"):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
@@ -690,13 +712,28 @@ def show_app():
             if selected_for_delete:
                 confirm_sel = st.checkbox("Confirm deletion of selected expenses", key="confirm_delete_selected_key")
                 if st.button("🗑️ Delete Selected Expenses", key="delete_selected_expenses_button_key") and confirm_sel:
+                    not_found = []
+                    deleted_ids = []
                     for did in selected_for_delete:
                         try:
-                            collection.delete_one({"_id": ObjectId(did)})
+                            result = collection.delete_one({"_id": ObjectId(did)})
                         except Exception:
-                            collection.delete_one({"_id": did})
-                    log_action("delete_selected_expenses", st.session_state["username"], details={"ids": selected_for_delete})
-                    st.success("Selected expenses deleted.")
+                            # if converting to ObjectId failed or original id stored as string
+                            result = collection.delete_one({"_id": did})
+                        if result.deleted_count == 0:
+                            not_found.append(did)
+                        else:
+                            deleted_ids.append(did)
+
+                    if deleted_ids:
+                        log_action("delete_selected_expenses", st.session_state["username"], details={"ids": deleted_ids})
+                    if not_found and deleted_ids:
+                        st.warning(f"Some IDs were not found and could not be deleted: {', '.join(not_found)}. Deleted: {', '.join(deleted_ids)}")
+                    elif not_found and not deleted_ids:
+                        st.info(f"No records found for selected IDs: {', '.join(not_found)}")
+                    else:
+                        st.success("Selected expenses deleted.")
+
     else:
         st.info("No expenses to show.")
 
