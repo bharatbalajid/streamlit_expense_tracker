@@ -627,12 +627,6 @@ def show_app():
             with create_col1:
                 if st.button("Create User", key="create_user_btn"):
                     create_user(cu_name, cu_pass, cu_role)
-            with create_col2:
-                if st.button("Clear Create Form", key="clear_create_form_btn"):
-                    # Use callback effect via session_state changes (safe)
-                    st.session_state["create_user_username"] = ""
-                    st.session_state["create_user_password"] = ""
-                    st.session_state["create_user_role"] = "user"
 
         # -------------------
         # Reset Password
@@ -649,9 +643,6 @@ def show_app():
                             st.error("Provide a new password.")
                         else:
                             reset_user_password(tgt_reset, new_pass)
-                with reset_col2:
-                    if st.button("Clear Reset Form", key="clear_reset_form"):
-                        st.session_state["reset_user_newpass"] = ""
             else:
                 st.info("No other users available for reset.")
 
@@ -670,10 +661,6 @@ def show_app():
                 with del_col1:
                     if st.button("🗑️ Delete User", key="delete_user_btn") and del_confirm:
                         delete_user(tgt_del, delete_expenses=del_expenses_opt)
-                with del_col2:
-                    if st.button("Cancel / Reset Delete", key="cancel_delete_user"):
-                        st.session_state["delete_user_confirm"] = False
-                        st.session_state["delete_user_expenses"] = False
             else:
                 st.info("No other users to delete.")
 
@@ -688,9 +675,6 @@ def show_app():
                 else:
                     log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
                     st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
-        with delall_col2:
-            if st.button("Cancel Delete All", key="cancel_delete_all"):
-                st.session_state["del_all_confirm"] = False
 
         with st.expander("View Audit Logs"):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
@@ -800,13 +784,6 @@ def show_app():
                             st.info(f"No records found for selected IDs: {', '.join(not_found)}")
                         else:
                             st.success("Selected expenses deleted.")
-                with delsel_col2:
-                    if st.button("Cancel / Reset Selection", key="cancel_reset_selected"):
-                        for did in selected_for_delete:
-                            cbk = f"del_cb_{did}"
-                            if cbk in st.session_state:
-                                st.session_state[cbk] = False
-                        st.session_state["confirm_delete_selected_key"] = False
 
     else:
         st.info("No expenses to show.")
