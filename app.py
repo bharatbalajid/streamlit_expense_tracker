@@ -1,9 +1,9 @@
 # app.py
 """
-Expense Tracker (full)
+Full Expense Tracker:
 - MongoDB backend: users, expenses, audit_logs
 - Redis-backed session tokens (persist across refresh)
-- Tanglish funny + money-saving tips on login page (centered)
+- Tanglish comedy + money-saving tips on login page (centered)
 - Admin controls: create/reset/delete user, delete expenses, view audit logs
 - PDF export with reportlab (optional)
 - Uses new Streamlit query param API (st.query_params)
@@ -23,13 +23,13 @@ import plotly.express as px
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# Redis should be installed for session persistence
+# Redis (required)
 try:
     import redis
 except Exception:
     redis = None
 
-# Optional ReportLab
+# Optional ReportLab for PDF export
 HAS_REPORTLAB = True
 try:
     from reportlab.lib.pagesizes import A4, landscape
@@ -45,28 +45,24 @@ except Exception:
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 
 # --------------------------
-# Require redis (we need persistence across refresh)
+# Redis requirement & connection
 # --------------------------
 if redis is None:
-    st.error("`redis` package not installed. Install it with `pip install redis` and restart the app.")
+    st.error("`redis` package not installed. Install with: pip install redis")
     st.stop()
 
-# --------------------------
-# Redis connection (from secrets or env)
-# --------------------------
 REDIS_URL = None
 if st.secrets and st.secrets.get("redis", {}).get("url"):
     REDIS_URL = st.secrets.get("redis", {}).get("url")
 else:
-    REDIS_URL = os.environ.get("REDIS_URL")  # optional env fallback
+    REDIS_URL = os.environ.get("REDIS_URL")
 
 if not REDIS_URL:
-    st.error("Redis URL not configured. Add it to .streamlit/secrets.toml under [redis] url or set REDIS_URL env var.")
+    st.error("Redis URL not configured. Add to .streamlit/secrets.toml under [redis] url or set REDIS_URL env var.")
     st.stop()
 
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    # quick test
     redis_client.ping()
 except Exception as e:
     st.error(f"Failed to connect to Redis: {e}")
@@ -85,7 +81,7 @@ else:
     COLLECTION_NAME = os.environ.get("MONGO_COLLECTION", "expenses")
 
 if not MONGO_URI:
-    st.error("MongoDB URI not configured in .streamlit/secrets.toml or environment.")
+    st.error("MongoDB URI not configured in .streamlit/secrets.toml or environment variable MONGO_URI.")
     st.stop()
 
 client = MongoClient(MONGO_URI)
@@ -110,10 +106,9 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
             "timestamp": datetime.utcnow()
         })
     except Exception:
-        # never break app because audit failed
+        # Do not raise — logging failure shouldn't break app
         pass
 
-# ensure superadmin from secrets
 def ensure_superadmin():
     if not st.secrets:
         return
@@ -132,7 +127,7 @@ def ensure_superadmin():
 ensure_superadmin()
 
 # --------------------------
-# Session defaults
+# Session defaults (in-memory state)
 # --------------------------
 for k, default in {
     "authenticated": False,
@@ -157,7 +152,6 @@ tip_headings = [
     "🤑 Budget Scene ku Punch Dialogue",
     "📉 Spend Pannadha… Laugh Pannu Da",
 ]
-
 sample_tips = [
     "😂 ATM la cash illana, adhu unoda saving reminder da!",
     "🍲 Veetla sambar ₹50… hotel la same sambar ₹250. Comedy ah illa?",
@@ -175,7 +169,7 @@ def get_random_heading_and_tip():
     return random.choice(tip_headings), random.choice(sample_tips)
 
 # --------------------------
-# Redis session helpers (use st.query_params)
+# Redis session helpers (st.query_params)
 # --------------------------
 def generate_token() -> str:
     return uuid.uuid4().hex
@@ -205,23 +199,16 @@ def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
         return False
 
 def set_query_token(token: str):
-    """
-    Set session_token in st.query_params. Use mapping of single value (string).
-    st.query_params accepts mapping-like assignments.
-    """
-    # st.query_params can be assigned a dict-like mapping of strings or lists.
+    # st.query_params expects mapping of key -> str or list[str]
     st.query_params.update({"session_token": token})
 
 def clear_query_params():
-    # Clear all query params
     st.query_params.clear()
 
 def read_token_from_query() -> Optional[str]:
-    # st.query_params.get returns value or list; normalize to string
     val = st.query_params.get("session_token", None)
     if val is None:
         return None
-    # If returned as list or str
     if isinstance(val, list):
         return val[0] if val else None
     return val
@@ -229,7 +216,7 @@ def read_token_from_query() -> Optional[str]:
 # --------------------------
 # Auth functions
 # --------------------------
-def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 * 4) -> Optional[str]:
+def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60*60*4) -> Optional[str]:
     token = generate_token()
     ok = store_token_in_redis(token, username, ttl_seconds)
     if ok:
@@ -242,7 +229,6 @@ def restore_session_from_url_token():
     if token and not st.session_state.get("authenticated"):
         username = get_username_from_token(token)
         if username:
-            # restore session_state
             st.session_state["authenticated"] = True
             st.session_state["username"] = username
             u = users_col.find_one({"username": username})
@@ -272,7 +258,6 @@ def login():
         st.session_state["username"] = user
         st.session_state["is_admin"] = (u.get("role") == "admin")
         st.session_state["_login_error"] = None
-        # create redis session and set query param
         create_redis_session_and_set_url(user)
         log_action("login", user)
     else:
@@ -382,25 +367,24 @@ def generate_friend_pdf_bytes(friend_name: str) -> bytes:
     return generate_pdf_bytes(df, title=title)
 
 # --------------------------
-# Visible docs
+# Visible docs (admin sees all)
 # --------------------------
 def get_visible_docs():
     if st.session_state.get("is_admin"):
         return list(collection.find())
     else:
-        owner = st.session_state.get("username")
-        return list(collection.find({"owner": owner}))
+        return list(collection.find({"owner": st.session_state.get("username")}))
 
 # --------------------------
 # Main UI
 # --------------------------
 def show_app():
-    # restore session from redis token in query params if present
+    # Try to restore session from token in URL (if any)
     restore_session_from_url_token()
 
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar: Login / Logout
+    # Sidebar: login/logout
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
@@ -415,35 +399,32 @@ def show_app():
                 st.success("Admin")
             st.button("Logout", on_click=logout, key="logout_button")
 
-    # If not authenticated: show centered Tanglish tip & heading
+    # If not authenticated: show centered Tanglish heading & tip
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
         st.markdown("---")
-
         if not st.session_state.get("login_heading") or not st.session_state.get("login_tip"):
             h, t = get_random_heading_and_tip()
-            st.session_state["login_heading"] = h
-            st.session_state["login_tip"] = t
+            st.session_state["login_heading"], st.session_state["login_tip"] = h, t
 
         st.markdown(f"<h3 style='text-align:center'>{st.session_state['login_heading']}</h3>", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align:center; font-size:20px; color:#2E8B57; margin-bottom:8px'>{st.session_state['login_tip']}</div>", unsafe_allow_html=True)
 
         if st.button("😂 Refresh Tip", key="refresh_tip_center"):
             h, t = get_random_heading_and_tip()
-            st.session_state["login_heading"] = h
-            st.session_state["login_tip"] = t
+            st.session_state["login_heading"], st.session_state["login_tip"] = h, t
             st.rerun()
-
         return
 
-    # Authenticated UI: expense form, admin controls, listing
-    categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Petrol", "Others"]
+    # Authenticated UI: Expense form, Admin controls, Expenses listing
+    categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Fuel", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
+    fuel_subcategories = ["Petrol", "Diesel", "EV Charge"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
-    col1, col2 = st.columns([2,1])
+    col1, col2 = st.columns([2, 1])
     with col1:
         chosen_cat = st.selectbox("Expense Type", options=categories, key="ui_category_key")
         if chosen_cat == "Groceries":
@@ -452,6 +433,9 @@ def show_app():
         elif chosen_cat == "Bill & Investment":
             sub = st.selectbox("Bill & Investment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
             category_final = f"Bill & Investment - {sub}"
+        elif chosen_cat == "Fuel":
+            sub = st.selectbox("Fuel Subcategory", fuel_subcategories, key="ui_fuel_subcat_key")
+            category_final = f"Fuel - {sub}"
         elif chosen_cat == "Others":
             custom = st.text_input("Custom category", key="ui_custom_category_key")
             category_final = custom.strip() if custom else "Others"
@@ -471,9 +455,8 @@ def show_app():
         expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_key")
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_key")
         notes = st.text_area("Comments / Notes (optional)", key="expense_notes_key")
-        if st.form_submit_button("💾 Save Expense", key="submit_expense_key"):
+        if st.form_submit_button("💾 Save Expense", key="save_expense_key"):
             ts = datetime.combine(expense_date, datetime.min.time())
-            owner = st.session_state["username"]
             try:
                 collection.insert_one({
                     "category": category_final,
@@ -481,13 +464,13 @@ def show_app():
                     "amount": float(amount),
                     "notes": notes,
                     "timestamp": ts,
-                    "owner": owner
+                    "owner": st.session_state["username"]
                 })
-                # extend token TTL when user is active
+                # refresh TTL for active session
                 token = read_token_from_query()
                 if token:
                     refresh_token_ttl(token)
-                log_action("add_expense", owner, details={"category": category_final, "amount": float(amount)})
+                log_action("add_expense", st.session_state["username"], details={"category": category_final, "amount": float(amount)})
                 st.success("✅ Expense saved successfully!")
             except Exception as e:
                 st.error(f"Failed to save expense: {e}")
@@ -633,7 +616,7 @@ def show_app():
         st.info("No expenses to show.")
 
 # --------------------------
-# Run
+# App entry
 # --------------------------
 if __name__ == "__main__":
     show_app()
