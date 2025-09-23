@@ -3,3 +3,4 @@ pandas
 plotly
 streamlit
 reportlab==4.1.0
+redis
