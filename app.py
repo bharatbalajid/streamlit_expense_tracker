@@ -1,17 +1,34 @@
 # app.py
-import streamlit as st
-from pymongo import MongoClient
-import pandas as pd
-from datetime import datetime
-from bson.objectid import ObjectId
-import io
-import hashlib
-import random
-import plotly.express as px
+"""
+Full Expense Tracker with:
+ - MongoDB backend (expenses, users, audit_logs)
+ - Redis-backed session tokens (prevent logout on page refresh)
+ - Tanglish comedy + money-saving tips on the login page (centered)
+ - Admin controls (create/reset/delete users, delete expenses, view audit logs)
+ - PDF export (optional: reportlab)
+"""
 
-# --------------------------
-# Optional PDF generation (ReportLab)
-# --------------------------
+import os
+import io
+import uuid
+import random
+import hashlib
+from datetime import datetime
+from typing import Optional
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+
+# Redis
+try:
+    import redis
+except Exception:
+    redis = None
+
+# Optional ReportLab (PDF)
 HAS_REPORTLAB = True
 try:
     from reportlab.lib.pagesizes import A4, landscape
@@ -27,44 +44,112 @@ except Exception:
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 
 # --------------------------
-# MongoDB Connection
+# Redis connection (try st.secrets, fallback to provided)
 # --------------------------
-MONGO_URI = st.secrets.get("mongo", {}).get("uri")
-DB_NAME = st.secrets.get("mongo", {}).get("db", "expense_tracker")
-COLLECTION_NAME = st.secrets.get("mongo", {}).get("collection", "expenses")
-USERS_COLLECTION = "users"
-AUDIT_COLLECTION = "audit_logs"
+# fallback url (use the one you provided or set to None). If you prefer not to hardcode, leave None.
+REDIS_FALLBACK = "redis://appuser:Balaji%238074@18.207.150.98:6379/0"
+
+REDIS_URL = None
+if st.secrets and st.secrets.get("redis", {}).get("url"):
+    REDIS_URL = st.secrets.get("redis", {}).get("url")
+else:
+    REDIS_URL = os.environ.get("REDIS_URL") or REDIS_FALLBACK
+
+redis_client = None
+if REDIS_URL and redis:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+    except Exception as e:
+        st.warning(f"Warning: Redis not available ({e}). Sessions will be stored in memory only.")
+        redis_client = None
+else:
+    if not redis:
+        st.warning("redis package not installed; install 'redis' to enable Redis-backed sessions.")
+    else:
+        st.info("Redis URL not configured; using in-memory session only.")
+
+# Redis helpers
+def generate_token() -> str:
+    return uuid.uuid4().hex
+
+def store_token_in_redis(token: str, username: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
+    if not redis_client:
+        return False
+    try:
+        return redis_client.setex(f"session:{token}", ttl_seconds, username)
+    except Exception:
+        return False
+
+def get_username_from_token(token: str) -> Optional[str]:
+    if not redis_client or not token:
+        return None
+    try:
+        return redis_client.get(f"session:{token}")
+    except Exception:
+        return None
+
+def delete_token(token: str) -> bool:
+    if not redis_client or not token:
+        return False
+    try:
+        return bool(redis_client.delete(f"session:{token}"))
+    except Exception:
+        return False
+
+def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
+    if not redis_client or not token:
+        return False
+    try:
+        return redis_client.expire(f"session:{token}", ttl_seconds)
+    except Exception:
+        return False
+
+# --------------------------
+# MongoDB connection (from secrets or env)
+# --------------------------
+if st.secrets and st.secrets.get("mongo", {}).get("uri"):
+    MONGO_URI = st.secrets.get("mongo", {}).get("uri")
+    DB_NAME = st.secrets.get("mongo", {}).get("db", "expense_tracker")
+    COLLECTION_NAME = st.secrets.get("mongo", {}).get("collection", "expenses")
+else:
+    MONGO_URI = os.environ.get("MONGO_URI")
+    DB_NAME = os.environ.get("MONGO_DB", "expense_tracker")
+    COLLECTION_NAME = os.environ.get("MONGO_COLLECTION", "expenses")
 
 if not MONGO_URI:
-    st.error("MongoDB URI not configured in .streamlit/secrets.toml")
+    st.error("MongoDB URI not configured in .streamlit/secrets.toml or environment.")
     st.stop()
 
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 collection = db[COLLECTION_NAME]
-users_col = db[USERS_COLLECTION]
-audit_col = db[AUDIT_COLLECTION]
+users_col = db["users"]
+audit_col = db["audit_logs"]
 
 # --------------------------
-# Helpers
+# Security helpers
 # --------------------------
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
+# Audit logging
 def log_action(action: str, actor: str, target: str = None, details: dict = None):
-    entry = {
-        "action": action,
-        "actor": actor,
-        "target": target,
-        "details": details or {},
-        "timestamp": datetime.utcnow(),
-    }
     try:
-        audit_col.insert_one(entry)
+        audit_col.insert_one({
+            "action": action,
+            "actor": actor,
+            "target": target,
+            "details": details or {},
+            "timestamp": datetime.utcnow()
+        })
     except Exception:
+        # Avoid raising exceptions from audit logging
         pass
 
+# Ensure superadmin from secrets
 def ensure_superadmin():
+    if not st.secrets:
+        return
     secret_user = st.secrets.get("admin", {}).get("username")
     secret_pass = st.secrets.get("admin", {}).get("password")
     if secret_user and secret_pass:
@@ -81,19 +166,108 @@ def ensure_superadmin():
 ensure_superadmin()
 
 # --------------------------
-# Session defaults
+# Session defaults (Streamlit in-memory)
 # --------------------------
 for k, default in {
     "authenticated": False,
     "username": None,
     "is_admin": False,
     "_login_error": None,
+    "login_heading": None,
+    "login_tip": None
 }.items():
     if k not in st.session_state:
         st.session_state[k] = default
 
 # --------------------------
-# Authentication
+# Tanglish headings & tips (funny + useful)
+# --------------------------
+tip_headings = [
+    "😂 Kasa Save Panra Comedy Scene",
+    "🤣 Wallet Cry Aana Avoid Panna Tip",
+    "💡 Ennada Expense Ah Comedy Pannradhu",
+    "🔥 Bill Kandu Shock Aagama Hack",
+    "😅 Salary Vanthuruchu… Aana Enga?",
+    "🤑 Budget Scene ku Punch Dialogue",
+    "📉 Spend Pannadha… Laugh Pannu Da",
+    "⚡ Current Bill la Shock Adikama Trick",
+    "🤣 Sothappal ah Savings ah Mathura Tip",
+    "😂 Expense Tracker ah Comedy Tracker aakuvom"
+]
+
+sample_tips = [
+    "😂 ATM la cash illana, adhu unoda saving reminder da!",
+    "🍲 Veetla sambar sapidara cost = ₹50… hotel la order panna same sambar = ₹250. Comedy ah illa?",
+    "💳 Credit card swipe panna easy… pay panna hard. On time settle pannunga da!",
+    "⚡ AC full night on panna… morning la bill paartha odane shock aagiduva.",
+    "📦 Online cart la 24 hours vacha consider pannitu purchase pannunga — impulse save aagum.",
+    "🤣 Monthly budget panna, illa na budget dhan unakku comedy pannum.",
+    "🚗 Solo ride ku petrol burn pannadha… carpool pannunga, comedy + savings free!",
+    "🍕 Daily pizza order panna… 1 varushathuku nee dhan oven vanganum nu sollanum.",
+    "😂 EMI sollitu monthly kasa edukaraanga… bank dhan final winner.",
+    "💡 Light off pannunga da — illa electric bill ku keta question varum.",
+    "📱 New phone aasai iruku… but last phone EMI glass ela nu check pannu.",
+    "🤣 Latte skip pannina millionaire aagave maate… but pocket full ah irukum.",
+    "🍎 Seasonal fruits vaangunga — cheaper and tasty.",
+    "😂 Amazon deal paartha purchase panna munnaale 24hr think pannunga.",
+    "👕 Same t-shirt 3 colors purchase panna unnecessary ah irukum.",
+    "⚡ Fan off pannama irundha… bill paartha odane nee fan aagiduva.",
+    "🤣 ‘Salary finished’ nu status podara munne… konjam save pannunga.",
+    "🍲 Biriyani craving ah veetla cook pannunga — savings + second plate!",
+    "😂 Gym ku membership irundalum, kadayila auto eduthu pogadha — walk free!",
+    "📊 Daily expense note panni paarunga — awareness saves cash."
+]
+
+def get_random_heading_and_tip():
+    return random.choice(tip_headings), random.choice(sample_tips)
+
+# --------------------------
+# Redis + session helpers integrated with Streamlit
+# --------------------------
+def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 * 4) -> Optional[str]:
+    """
+    Create token, store in Redis (if available), and set token in URL so refresh persists.
+    Returns token if created, else None.
+    """
+    if not redis_client:
+        return None
+    token = generate_token()
+    try:
+        store_token_in_redis(token, username, ttl_seconds)
+        st.experimental_set_query_params(session_token=token)
+        return token
+    except Exception:
+        return None
+
+def restore_session_from_url_token():
+    """
+    On app start, look for session_token in URL and restore session if Redis has it.
+    """
+    params = st.experimental_get_query_params()
+    token = params.get("session_token", [None])[0] if params else None
+    if token and not st.session_state.get("authenticated"):
+        username = get_username_from_token(token)
+        if username:
+            st.session_state["authenticated"] = True
+            st.session_state["username"] = username
+            u = users_col.find_one({"username": username})
+            st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
+
+def clear_url_token_and_redis():
+    """
+    Remove session token from Redis & clear URL query params.
+    """
+    params = st.experimental_get_query_params()
+    token = params.get("session_token", [None])[0] if params else None
+    if token:
+        try:
+            delete_token(token)
+        except Exception:
+            pass
+    st.experimental_set_query_params()
+
+# --------------------------
+# Authentication functions
 # --------------------------
 def login():
     user = st.session_state.get("login_user", "").strip()
@@ -101,21 +275,33 @@ def login():
     if not user or not pwd:
         st.session_state["_login_error"] = "Provide both username and password."
         return
+
     u = users_col.find_one({"username": user})
     if not u:
         st.session_state["_login_error"] = "Invalid username or password."
         return
+
     if u.get("password_hash") == hash_password(pwd):
         st.session_state["authenticated"] = True
         st.session_state["username"] = user
         st.session_state["is_admin"] = (u.get("role") == "admin")
         st.session_state["_login_error"] = None
+        # create Redis token and set it in URL (if Redis configured)
+        try:
+            create_redis_session_and_set_url(user)
+        except Exception:
+            pass
         log_action("login", user)
     else:
         st.session_state["_login_error"] = "Invalid username or password."
 
 def logout():
-    log_action("logout", st.session_state.get("username"))
+    user = st.session_state.get("username")
+    log_action("logout", user)
+    try:
+        clear_url_token_and_redis()
+    except Exception:
+        pass
     st.session_state["authenticated"] = False
     st.session_state["username"] = None
     st.session_state["is_admin"] = False
@@ -138,11 +324,29 @@ def create_user(username: str, password: str, role: str = "user"):
         "role": role,
         "created_at": datetime.utcnow()
     })
-    log_action("create_user", st.session_state["username"], target=username, details={"role": role})
+    log_action("create_user", st.session_state.get("username"), target=username, details={"role": role})
     st.success(f"User '{username}' created with role '{role}'.")
 
+def reset_user_password(target_username: str, new_password: str):
+    if not target_username or not new_password:
+        st.error("Provide target user and new password.")
+        return
+    users_col.update_one({"username": target_username}, {"$set": {"password_hash": hash_password(new_password)}})
+    log_action("reset_password", st.session_state.get("username"), target=target_username)
+    st.success(f"Password for '{target_username}' has been reset.")
+
+def delete_user(target_username: str, delete_expenses: bool = False):
+    if not target_username:
+        st.error("Select a user to delete.")
+        return
+    users_col.delete_one({"username": target_username})
+    if delete_expenses:
+        collection.delete_many({"owner": target_username})
+    log_action("delete_user", st.session_state.get("username"), target=target_username, details={"deleted_expenses": delete_expenses})
+    st.success(f"User '{target_username}' deleted.")
+
 # --------------------------
-# PDF Export helper
+# PDF export helpers (ReportLab)
 # --------------------------
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     if not HAS_REPORTLAB:
@@ -174,10 +378,28 @@ def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes
     ]))
     elems.append(tbl)
     doc.build(elems)
-    return buffer.getvalue()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
+
+def generate_friend_pdf_bytes(friend_name: str) -> bytes:
+    if not friend_name:
+        raise ValueError("friend_name required")
+    docs = list(collection.find({"friend": friend_name}))
+    if not docs:
+        empty_df = pd.DataFrame(columns=["timestamp", "category", "friend", "amount", "notes", "owner"])
+        title = f"Expense Report - Friend: {friend_name} (No records)"
+        return generate_pdf_bytes(empty_df, title=title)
+    df = pd.DataFrame(docs)
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
+    if "_id" in df.columns:
+        df = df.drop(columns=["_id"])
+    title = f"Expense Report - Friend: {friend_name}"
+    return generate_pdf_bytes(df, title=title)
 
 # --------------------------
-# Helper: visible data
+# Visible docs helper
 # --------------------------
 def get_visible_docs():
     if st.session_state.get("is_admin"):
@@ -186,41 +408,15 @@ def get_visible_docs():
         return list(collection.find({"owner": st.session_state.get("username")}))
 
 # --------------------------
-# Fun Tips (money + comedy)
-# --------------------------
-sample_tips = [
-    "😂 ATM la cash illana, adhu unoda saving reminder da!",
-    "🍲 Veetla sambar sapidara cost = ₹50… hotel la order panna same sambar = ₹250. Comedy ah illa?",
-    "💳 Credit card swipe panna easy… pay panna hard. On time settle pannunga da!",
-    "⚡ AC full night on panna… morning la bill paartha odane cold ah varum.",
-    "📦 Online cart la 3 days vachutu decide pannunga… impulse buy ah nu theriyum.",
-    "🤣 Monthly budget pannunga… illa na budget dhan unakku comedy pannum.",
-    "🚗 Solo ride ku petrol burn pannadha… carpool pannunga, comedy + savings free bonus.",
-    "🍕 Daily pizza order panna… 1 varushathuku nee dhan oven aagiduva.",
-    "😂 EMI nu sollitu monthly kasa edukaraanga… naan dhan emi nu enga amma ku pocket money kuduthutu iruken.",
-    "💡 Light off pannunga… illa electric bill light speed la increase aagum.",
-    "📱 New phone vaanga aasai iruku… but nee last phone emi kooda pay panna mudikala.",
-    "🤣 Latte skip pannina billionaire aagave maate… but thanni bottle free ah fill pannunga.",
-    "🍎 Seasonal fruits vaangunga… offseason la vaanguna nee dhan season out aagiduva.",
-    "😂 Amazon ‘Deal of the Day’ la nee deal ah illa da… bank dhan winner.",
-    "👕 Same t-shirt 3 color vaangina savings illai… adhu comedy collection.",
-    "⚡ Fan off pannama veetla irundha… bill paartha odane nee fan aagiduva.",
-    "🤣 ‘Salary finished’ nu status podara munne… konjam save pannunga.",
-    "🍲 Biriyani craving ah veetla cook pannunga… savings + 2nd plate free.",
-    "😂 Gym ku ₹1000 kuduthutu auto la pogadha… walk pannunga free + fitness.",
-    "📊 Expense note pannunga… illa na expense dhan unakku note pannum.",
-]
-
-def get_random_tip():
-    return random.choice(sample_tips)
-
-# --------------------------
-# Main App
+# Main app UI
 # --------------------------
 def show_app():
+    # Try to restore from Redis token in URL (if exists)
+    restore_session_from_url_token()
+
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar: login/logout
+    # Sidebar - login/logout
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
@@ -235,35 +431,39 @@ def show_app():
                 st.success("Admin")
             st.button("Logout", on_click=logout, key="logout_button")
 
-    # Show login tips if not logged in
+    # If not authenticated -> centered Tanglish heading + tip
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
         st.markdown("---")
-        st.subheader("😂 Expense Tracker ah Comedy Tracker aakuvom")
 
-        if "current_tip" not in st.session_state:
-            st.session_state["current_tip"] = get_random_tip()
+        # initialize session-stored heading & tip if not set
+        if not st.session_state.get("login_heading") or not st.session_state.get("login_tip"):
+            h, t = get_random_heading_and_tip()
+            st.session_state["login_heading"] = h
+            st.session_state["login_tip"] = t
 
-        st.markdown(
-            f"<div style='text-align:center; font-size:20px; color:#2E8B57;'>{st.session_state['current_tip']}</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"<h3 style='text-align:center'>{st.session_state['login_heading']}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center; font-size:20px; color:#2E8B57; margin-bottom:8px'>{st.session_state['login_tip']}</div>", unsafe_allow_html=True)
 
-        if st.button("😂 Refresh Tip", key="refresh_tip_key"):
-            st.session_state["current_tip"] = get_random_tip()
+        if st.button("😂 Refresh Tip", key="refresh_tip_center"):
+            h, t = get_random_heading_and_tip()
+            st.session_state["login_heading"] = h
+            st.session_state["login_tip"] = t
             st.rerun()
+
         return
 
-    # --------------------------
-    # Expense form & categories
-    # --------------------------
+    # Authenticated: show expense form etc.
+    # Categories and subcategories
     categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Petrol", "Others"]
-    grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
-                             "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
+    grocery_subcategories = [
+        "Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
+        "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"
+    ]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([2,1])
     with col1:
         chosen_cat = st.selectbox("Expense Type", options=categories, key="ui_category_key")
         if chosen_cat == "Groceries":
@@ -287,11 +487,12 @@ def show_app():
 
     st.markdown("---")
 
-    with st.form("expense_form_key", clear_on_submit=True):
+    # Expense entry form
+    with st.form("expense_form", clear_on_submit=True):
         expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_key")
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_key")
-        notes = st.text_area("Comments / Notes", key="expense_notes_key")
-        if st.form_submit_button("💾 Save Expense", key="save_expense_key"):
+        notes = st.text_area("Comments / Notes (optional)", key="expense_notes_key")
+        if st.form_submit_button("💾 Save Expense", key="submit_expense_key"):
             ts = datetime.combine(expense_date, datetime.min.time())
             owner = st.session_state["username"]
             try:
@@ -303,69 +504,67 @@ def show_app():
                     "timestamp": ts,
                     "owner": owner
                 })
+                # refresh token TTL on activity (sliding expiration)
+                params = st.experimental_get_query_params()
+                token = params.get("session_token", [None])[0] if params else None
+                if token:
+                    refresh_token_ttl(token)
                 log_action("add_expense", owner, details={"category": category_final, "amount": float(amount)})
                 st.success("✅ Expense saved successfully!")
             except Exception as e:
                 st.error(f"Failed to save expense: {e}")
 
-    # --------------------------
     # Admin Controls
-    # --------------------------
     if st.session_state.get("is_admin"):
         st.markdown("---")
         st.subheader("⚙️ Admin Controls")
 
-        with st.expander("Create User", expanded=False):
-            cu_name = st.text_input("New username", key="create_username_key")
-            cu_pass = st.text_input("New password", type="password", key="create_password_key")
-            cu_role = st.selectbox("Role", ["user", "admin"], key="create_role_key")
-            if st.button("Create User", key="create_user_button"):
+        # Create User
+        with st.expander("Create User"):
+            cu_name = st.text_input("New username", key="create_user_username")
+            cu_pass = st.text_input("New password", type="password", key="create_user_password")
+            cu_role = st.selectbox("Role", ["user", "admin"], key="create_user_role")
+            if st.button("Create User", key="create_user_btn"):
                 create_user(cu_name, cu_pass, cu_role)
 
-        with st.expander("Reset Password", expanded=False):
-            users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1})
-                                if d["username"] != st.session_state["username"]]
+        # Reset Password
+        with st.expander("Reset Password"):
+            users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
             if users_list_reset:
-                tgt_reset = st.selectbox("Select user to reset", options=users_list_reset, key="reset_user_select_key")
-                new_pass = st.text_input("New password", type="password", key="reset_user_password_key")
-                if st.button("Reset Password", key="reset_user_button_key"):
+                tgt_reset = st.selectbox("Select user to reset", options=users_list_reset, key="reset_user_select")
+                new_pass = st.text_input("New password", type="password", key="reset_user_newpass")
+                if st.button("Reset Password", key="reset_user_btn"):
                     if not new_pass:
                         st.error("Provide a new password.")
                     else:
-                        users_col.update_one({"username": tgt_reset},
-                                             {"$set": {"password_hash": hash_password(new_pass)}})
-                        log_action("reset_password", st.session_state["username"], target=tgt_reset)
-                        st.success(f"Password for '{tgt_reset}' has been reset.")
+                        reset_user_password(tgt_reset, new_pass)
             else:
                 st.info("No other users available for reset.")
 
-        with st.expander("Delete User", expanded=False):
+        # Delete User
+        with st.expander("Delete User"):
             users_list_del = [d["username"] for d in users_col.find({}, {"username": 1})
                               if d["username"] != st.session_state["username"]
-                              and d["username"] != st.secrets.get("admin", {}).get("username")]
+                              and d["username"] != (st.secrets.get("admin", {}).get("username") if st.secrets else None)]
             if users_list_del:
-                tgt_del = st.selectbox("Select user to delete", options=users_list_del, key="delete_user_select_key")
-                del_confirm = st.checkbox("I confirm deletion of this user and optionally their expenses",
-                                          key="delete_user_confirm_key")
-                del_expenses_opt = st.checkbox("Also delete user's expenses", key="delete_user_expenses_opt_key")
-                if st.button("🗑️ Delete User", key="delete_user_button_key") and del_confirm:
-                    users_col.delete_one({"username": tgt_del})
-                    if del_expenses_opt:
-                        collection.delete_many({"owner": tgt_del})
-                    log_action("delete_user", st.session_state["username"], target=tgt_del,
-                               details={"deleted_expenses": bool(del_expenses_opt)})
-                    st.success(f"User '{tgt_del}' deleted.")
+                tgt_del = st.selectbox("Select user to delete", options=users_list_del, key="delete_user_select")
+                del_confirm = st.checkbox("I confirm deletion of this user and optionally their expenses", key="delete_user_confirm")
+                del_expenses_opt = st.checkbox("Also delete user's expenses", key="delete_user_expenses")
+                if st.button("🗑️ Delete User", key="delete_user_btn") and del_confirm:
+                    delete_user(tgt_del, delete_expenses=del_expenses_opt)
             else:
                 st.info("No other users to delete.")
 
+        # Delete all expenses (danger)
         st.markdown("#### Danger Zone")
-        del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="delete_all_confirm_key")
-        if st.button("🔥 Delete All Expenses", key="delete_all_button_key") and del_all_confirm:
+        del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="del_all_confirm")
+        if st.button("🔥 Delete All Expenses", key="delete_all_btn") and del_all_confirm:
             collection.delete_many({})
             log_action("delete_all_expenses", st.session_state["username"])
             st.warning("⚠️ All expenses deleted.")
 
-        with st.expander("View Audit Logs", expanded=False):
+        # Audit logs
+        with st.expander("View Audit Logs"):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
             if logs:
                 logs_df = pd.DataFrame(logs)
@@ -389,17 +588,63 @@ def show_app():
                 df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
             except Exception:
                 df["timestamp"] = df["timestamp"].astype(str)
+
         st.subheader("📊 All Expenses (Visible to you)")
         st.dataframe(df)
 
+        # Download PDF (visible)
+        try:
+            df_download = df.copy()
+            if "_id" in df_download.columns:
+                df_download = df_download.drop(columns=["_id"])
+            if HAS_REPORTLAB:
+                pdf_title = f"Expense Report - {st.session_state['username']}" if not st.session_state["is_admin"] else "Expense Report - Admin View"
+                pdf_bytes = generate_pdf_bytes(df_download, title=pdf_title)
+                st.download_button("⬇️ Download PDF (Visible Expenses)", data=pdf_bytes, file_name="expenses_report.pdf", mime="application/pdf")
+            else:
+                st.info("PDF export requires 'reportlab' package.")
+        except Exception as e:
+            st.error(f"Failed to prepare download: {e}")
+
+        st.metric("💵 Total Spending", f"₹ {df['amount'].sum():.2f}" if "amount" in df.columns else "₹ 0.00")
+
+        cat_summary = df.groupby("category")["amount"].sum().reset_index() if "category" in df.columns and "amount" in df.columns else pd.DataFrame(columns=["category", "amount"])
+        friend_summary = df.groupby("friend")["amount"].sum().reset_index() if "friend" in df.columns and "amount" in df.columns else pd.DataFrame(columns=["friend", "amount"])
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("📌 Spending by Category")
+            if not cat_summary.empty:
+                st.plotly_chart(px.bar(cat_summary, x="category", y="amount", text="amount", color="category"), use_container_width=True)
+            else:
+                st.info("No category data to plot.")
+        with c2:
+            st.subheader("👥 Spending by Friend")
+            if not friend_summary.empty:
+                st.plotly_chart(px.bar(friend_summary, x="friend", y="amount", text="amount", color="friend"), use_container_width=True)
+            else:
+                st.info("No friend data to plot.")
+
+        st.subheader("🥧 Category Breakdown")
+        if not cat_summary.empty:
+            st.plotly_chart(px.pie(cat_summary, names="category", values="amount", title="Expenses by Category"), use_container_width=True)
+        else:
+            st.info("No category data for pie chart.")
+
+        st.subheader("Summary by Friend")
+        if not friend_summary.empty:
+            st.table(friend_summary.set_index("friend"))
+        else:
+            st.info("No friend summary yet.")
+
+        # Admin: delete selected expenses
         if st.session_state.get("is_admin"):
             st.markdown("---")
             st.write("Delete individual expenses (admin)")
             selected_for_delete = []
             for idx, row in df.iterrows():
                 cb_key = f"del_cb_{row['_id']}"
-                if st.checkbox(f"Delete {row['timestamp']} | {row.get('category','')} | ₹{row.get('amount','')}",
-                               key=cb_key):
+                if st.checkbox(f"Delete {row['timestamp']} | {row.get('category','')} | ₹{row.get('amount','')}", key=cb_key):
                     selected_for_delete.append(row["_id"])
             if selected_for_delete:
                 confirm_sel = st.checkbox("Confirm deletion of selected expenses", key="confirm_delete_selected_key")
@@ -409,12 +654,13 @@ def show_app():
                             collection.delete_one({"_id": ObjectId(did)})
                         except Exception:
                             collection.delete_one({"_id": did})
-                    log_action("delete_selected_expenses", st.session_state["username"],
-                               details={"ids": selected_for_delete})
+                    log_action("delete_selected_expenses", st.session_state["username"], details={"ids": selected_for_delete})
                     st.success("Selected expenses deleted.")
     else:
         st.info("No expenses to show.")
 
+# --------------------------
 # Entry
+# --------------------------
 if __name__ == "__main__":
     show_app()
