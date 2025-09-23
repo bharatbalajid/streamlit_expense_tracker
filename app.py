@@ -137,8 +137,19 @@ for k, default in {
     "is_admin": False,
     "_login_error": None,
     "login_heading": None,
-    "login_tip": None
-}.items():
+    "login_tip": None,
+    # admin UI keys (initialize to avoid KeyErrors)
+    "create_user_username": "",
+    "create_user_password": "",
+    "create_user_role": "user",
+    "reset_user_select": "",
+    "reset_user_newpass": "",
+    "delete_user_select": "",
+    "delete_user_confirm": False,
+    "delete_user_expenses": False,
+    "del_all_confirm": False,
+    "confirm_delete_selected_key": False,
+} .items():
     if k not in st.session_state:
         st.session_state[k] = default
 
@@ -582,26 +593,51 @@ def show_app():
         st.markdown("---")
         st.subheader("⚙️ Admin Controls")
 
+        # -------------------
+        # Create User
+        # -------------------
         with st.expander("Create User"):
+            # keep session_state-backed defaults to allow Reset button to work
             cu_name = st.text_input("New username", key="create_user_username")
             cu_pass = st.text_input("New password", type="password", key="create_user_password")
             cu_role = st.selectbox("Role", ["user", "admin"], key="create_user_role")
-            if st.button("Create User", key="create_user_btn"):
-                create_user(cu_name, cu_pass, cu_role)
+            create_col1, create_col2 = st.columns([1,1])
+            with create_col1:
+                if st.button("Create User", key="create_user_btn"):
+                    create_user(cu_name, cu_pass, cu_role)
+            with create_col2:
+                # Reset only clears the form inputs, not the database entries/names
+                if st.button("Reset Create Form", key="reset_create_form"):
+                    st.session_state["create_user_username"] = ""
+                    st.session_state["create_user_password"] = ""
+                    st.session_state["create_user_role"] = "user"
 
+        # -------------------
+        # Reset Password
+        # -------------------
         with st.expander("Reset Password"):
             users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
             if users_list_reset:
+                # default selection persists in session_state["reset_user_select"]
                 tgt_reset = st.selectbox("Select user to reset", options=users_list_reset, key="reset_user_select")
                 new_pass = st.text_input("New password", type="password", key="reset_user_newpass")
-                if st.button("Reset Password", key="reset_user_btn"):
-                    if not new_pass:
-                        st.error("Provide a new password.")
-                    else:
-                        reset_user_password(tgt_reset, new_pass)
+                reset_col1, reset_col2 = st.columns([1,1])
+                with reset_col1:
+                    if st.button("Reset Password", key="reset_user_btn"):
+                        if not new_pass:
+                            st.error("Provide a new password.")
+                        else:
+                            reset_user_password(tgt_reset, new_pass)
+                with reset_col2:
+                    if st.button("Clear Reset Form", key="clear_reset_form"):
+                        # keep dropdown list visible, clear password
+                        st.session_state["reset_user_newpass"] = ""
             else:
                 st.info("No other users available for reset.")
 
+        # -------------------
+        # Delete User
+        # -------------------
         with st.expander("Delete User"):
             users_list_del = [d["username"] for d in users_col.find({}, {"username": 1})
                               if d["username"] != st.session_state["username"]
@@ -610,20 +646,33 @@ def show_app():
                 tgt_del = st.selectbox("Select user to delete", options=users_list_del, key="delete_user_select")
                 del_confirm = st.checkbox("I confirm deletion of this user and optionally their expenses", key="delete_user_confirm")
                 del_expenses_opt = st.checkbox("Also delete user's expenses", key="delete_user_expenses")
-                if st.button("🗑️ Delete User", key="delete_user_btn") and del_confirm:
-                    delete_user(tgt_del, delete_expenses=del_expenses_opt)
+                del_col1, del_col2 = st.columns([1,1])
+                with del_col1:
+                    if st.button("🗑️ Delete User", key="delete_user_btn") and del_confirm:
+                        delete_user(tgt_del, delete_expenses=del_expenses_opt)
+                with del_col2:
+                    # Cancel/Reset — uncheck confirmations but keep the selected username visible
+                    if st.button("Cancel / Reset Delete", key="cancel_delete_user"):
+                        st.session_state["delete_user_confirm"] = False
+                        st.session_state["delete_user_expenses"] = False
+                        # keep delete_user_select as-is (so the name remains visible)
             else:
                 st.info("No other users to delete.")
 
         st.markdown("#### Danger Zone")
         del_all_confirm = st.checkbox("I confirm deleting ALL expenses (admin only)", key="del_all_confirm")
-        if st.button("🔥 Delete All Expenses", key="delete_all_btn") and del_all_confirm:
-            result = collection.delete_many({})
-            if result.deleted_count == 0:
-                st.info("No expense records found to delete.")
-            else:
-                log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
-                st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
+        delall_col1, delall_col2 = st.columns([1,1])
+        with delall_col1:
+            if st.button("🔥 Delete All Expenses", key="delete_all_btn") and del_all_confirm:
+                result = collection.delete_many({})
+                if result.deleted_count == 0:
+                    st.info("No expense records found to delete.")
+                else:
+                    log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
+                    st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
+        with delall_col2:
+            if st.button("Cancel Delete All", key="cancel_delete_all"):
+                st.session_state["del_all_confirm"] = False
 
         with st.expander("View Audit Logs"):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
@@ -709,28 +758,39 @@ def show_app():
                     selected_for_delete.append(row["_id"])
             if selected_for_delete:
                 confirm_sel = st.checkbox("Confirm deletion of selected expenses", key="confirm_delete_selected_key")
-                if st.button("🗑️ Delete Selected Expenses", key="delete_selected_expenses_button_key") and confirm_sel:
-                    not_found = []
-                    deleted_ids = []
-                    for did in selected_for_delete:
-                        try:
-                            result = collection.delete_one({"_id": ObjectId(did)})
-                        except Exception:
-                            # if converting to ObjectId failed or original id stored as string
-                            result = collection.delete_one({"_id": did})
-                        if result.deleted_count == 0:
-                            not_found.append(did)
-                        else:
-                            deleted_ids.append(did)
+                delsel_col1, delsel_col2 = st.columns([1,1])
+                with delsel_col1:
+                    if st.button("🗑️ Delete Selected Expenses", key="delete_selected_expenses_button_key") and confirm_sel:
+                        not_found = []
+                        deleted_ids = []
+                        for did in selected_for_delete:
+                            try:
+                                result = collection.delete_one({"_id": ObjectId(did)})
+                            except Exception:
+                                # if converting to ObjectId failed or original id stored as string
+                                result = collection.delete_one({"_id": did})
+                            if result.deleted_count == 0:
+                                not_found.append(did)
+                            else:
+                                deleted_ids.append(did)
 
-                    if deleted_ids:
-                        log_action("delete_selected_expenses", st.session_state["username"], details={"ids": deleted_ids})
-                    if not_found and deleted_ids:
-                        st.warning(f"Some IDs were not found and could not be deleted: {', '.join(not_found)}. Deleted: {', '.join(deleted_ids)}")
-                    elif not_found and not deleted_ids:
-                        st.info(f"No records found for selected IDs: {', '.join(not_found)}")
-                    else:
-                        st.success("Selected expenses deleted.")
+                        if deleted_ids:
+                            log_action("delete_selected_expenses", st.session_state["username"], details={"ids": deleted_ids})
+                        if not_found and deleted_ids:
+                            st.warning(f"Some IDs were not found and could not be deleted: {', '.join(not_found)}. Deleted: {', '.join(deleted_ids)}")
+                        elif not_found and not deleted_ids:
+                            st.info(f"No records found for selected IDs: {', '.join(not_found)}")
+                        else:
+                            st.success("Selected expenses deleted.")
+                with delsel_col2:
+                    # Reset selection: uncheck all generated checkboxes by clearing keys in session_state
+                    if st.button("Cancel / Reset Selection", key="cancel_reset_selected"):
+                        for did in selected_for_delete:
+                            cbk = f"del_cb_{did}"
+                            if cbk in st.session_state:
+                                st.session_state[cbk] = False
+                        st.session_state["confirm_delete_selected_key"] = False
+            # end selected_for_delete handling
 
     else:
         st.info("No expenses to show.")
