@@ -441,7 +441,7 @@ def show_app():
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
-    fuel_subcategories = ["Petrol", "Disel", "EV Charge"]
+    fuel_subcategories = ["Petrol", "Diesel", "EV Charge"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
     col1, col2 = st.columns([2,1])
