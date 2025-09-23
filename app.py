@@ -1,12 +1,12 @@
 # app.py
 """
-Expense Tracker (full)
+Expense Tracker (full) with cookie-backed sessions via small JS snippets.
 - MongoDB backend: users, expenses, audit_logs
 - Redis-backed session tokens (persist across refresh)
+- JS writes session_token cookie and removes token from URL
 - Tanglish funny + money-saving tips on login page (centered)
 - Admin controls: create/reset/delete user, delete expenses, view audit logs
 - PDF export with reportlab (optional)
-- Uses new Streamlit query param API (st.query_params)
 """
 
 import os
@@ -66,7 +66,6 @@ if not REDIS_URL:
 
 try:
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    # quick test
     redis_client.ping()
 except Exception as e:
     st.error(f"Failed to connect to Redis: {e}")
@@ -110,10 +109,8 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
             "timestamp": datetime.utcnow()
         })
     except Exception:
-        # never break app because audit failed
         pass
 
-# ensure superadmin from secrets
 def ensure_superadmin():
     if not st.secrets:
         return
@@ -175,7 +172,7 @@ def get_random_heading_and_tip():
     return random.choice(tip_headings), random.choice(sample_tips)
 
 # --------------------------
-# Redis session helpers (use st.query_params)
+# Redis session helpers
 # --------------------------
 def generate_token() -> str:
     return uuid.uuid4().hex
@@ -204,36 +201,77 @@ def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
     except Exception:
         return False
 
+# helper to set query param (temporary)
 def set_query_token(token: str):
-    """
-    Set session_token in st.query_params. Use mapping of single value (string).
-    st.query_params accepts mapping-like assignments.
-    """
-    # st.query_params can be assigned a dict-like mapping of strings or lists.
     st.query_params.update({"session_token": token})
 
 def clear_query_params():
-    # Clear all query params
     st.query_params.clear()
 
 def read_token_from_query() -> Optional[str]:
-    # st.query_params.get returns value or list; normalize to string
     val = st.query_params.get("session_token", None)
     if val is None:
         return None
-    # If returned as list or str
     if isinstance(val, list):
         return val[0] if val else None
     return val
 
 # --------------------------
-# Auth functions
+# Cookie <-> URL tiny JS helpers
+# --------------------------
+COOKIE_READER_HTML = """
+<script>
+(function(){
+  // if URL already has session_token, do nothing
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('session_token')) {
+    // already present — server will handle
+    return;
+  }
+  // read cookie
+  function readCookie(name) {
+    const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return v ? v.pop() : '';
+  }
+  const token = readCookie('session_token');
+  if (token) {
+    // add token to URL to allow server-side restore, this triggers Streamlit rerun
+    const newUrl = window.location.pathname + '?session_token=' + encodeURIComponent(token);
+    window.location.href = newUrl;
+  }
+})();
+</script>
+"""
+
+COOKIE_SETTER_HTML = """
+<script>
+(function(){
+  // read session_token from URL and set cookie, then remove it from URL (replaceState)
+  const urlParams = new URLSearchParams(window.location.search);
+  if (!urlParams.has('session_token')) {
+    // nothing to do
+    return;
+  }
+  const token = urlParams.get('session_token');
+  if (!token) return;
+  // set cookie for 4 hours (same TTL as Redis)
+  const maxAge = 60*60*4;
+  document.cookie = 'session_token=' + encodeURIComponent(token) + '; path=/; max-age=' + maxAge + ';';
+  // remove query param without reload
+  const cleanUrl = window.location.protocol + '//' + window.location.host + window.location.pathname;
+  window.history.replaceState({}, document.title, cleanUrl + window.location.hash);
+})();
+</script>
+"""
+
+# --------------------------
+# Authentication functions
 # --------------------------
 def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 * 4) -> Optional[str]:
     token = generate_token()
     ok = store_token_in_redis(token, username, ttl_seconds)
     if ok:
-        set_query_token(token)
+        set_query_token(token)  # temporarily put in URL so JS can pick it up and set cookie
         return token
     return None
 
@@ -242,11 +280,11 @@ def restore_session_from_url_token():
     if token and not st.session_state.get("authenticated"):
         username = get_username_from_token(token)
         if username:
-            # restore session_state
             st.session_state["authenticated"] = True
             st.session_state["username"] = username
             u = users_col.find_one({"username": username})
             st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
+            log_action("session_restored", username)
 
 def clear_url_token_and_redis():
     token = read_token_from_query()
@@ -272,7 +310,7 @@ def login():
         st.session_state["username"] = user
         st.session_state["is_admin"] = (u.get("role") == "admin")
         st.session_state["_login_error"] = None
-        # create redis session and set query param
+        # create redis session and set URL param temporarily -> JS will convert to cookie and clean URL
         create_redis_session_and_set_url(user)
         log_action("login", user)
     else:
@@ -281,6 +319,16 @@ def login():
 def logout():
     user = st.session_state.get("username")
     log_action("logout", user)
+    # delete cookie and remove redis token (if present in query)
+    # attempt to read token from cookie via client: inject JS to delete cookie and then clear query param server-side
+    st.components.v1.html("""
+    <script>
+      document.cookie = "session_token=; path=/; max-age=0;";
+      // also reload to let server clear session if needed
+      setTimeout(function(){ window.location.href = window.location.pathname; }, 200);
+    </script>
+    """, height=80)
+    # also try to clear server-side token if present in query params
     try:
         clear_url_token_and_redis()
     except Exception:
@@ -395,8 +443,21 @@ def get_visible_docs():
 # Main UI
 # --------------------------
 def show_app():
-    # restore session from redis token in query params if present
+    # If not authenticated and no token in URL, inject cookie reader JS
+    token_in_query = read_token_from_query()
+    if not st.session_state.get("authenticated") and not token_in_query:
+        # cookie reader will redirect (by adding ?session_token=...) if cookie exists, triggering a Streamlit rerun
+        st.components.v1.html(COOKIE_READER_HTML, height=10)
+
+    # If URL has token, server-side restore will pick it up
     restore_session_from_url_token()
+
+    # If after restore we still have token in URL, inject cookie-setter to persist to cookie and clean URL
+    token_in_query = read_token_from_query()
+    if token_in_query:
+        st.components.v1.html(COOKIE_SETTER_HTML, height=10)
+        # after cookie setter runs in browser it will remove the query param (history.replaceState)
+        # but server still has token for this run; next refresh will have no query param.
 
     st.title("💰 Personal Expense Tracker")
 
@@ -432,11 +493,11 @@ def show_app():
             h, t = get_random_heading_and_tip()
             st.session_state["login_heading"] = h
             st.session_state["login_tip"] = t
-            st.rerun()
+            st.experimental_rerun()
 
         return
 
-    # Authenticated UI: expense form, admin controls, listing
+    # Authenticated UI
     categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Fuel", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
@@ -454,8 +515,11 @@ def show_app():
             sub = st.selectbox("Bill & Investment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
             category_final = f"Bill & Investment - {sub}"
         elif chosen_cat == "Fuel":
-            sub = st.selectbox("Fuel Subcategory", fuel_subcategories, key="ui_grocery_subcat_key")
+            sub = st.selectbox("Fuel Subcategory", fuel_subcategories, key="ui_fuel_subcat_key")
             category_final = f"Fuel - {sub}"
+        elif chosen_cat == "Others":
+            custom = st.text_input("Custom category", key="ui_custom_category_key")
+            category_final = custom.strip() if custom else "Others"
         else:
             category_final = chosen_cat
     with col2:
@@ -484,9 +548,12 @@ def show_app():
                     "timestamp": ts,
                     "owner": owner
                 })
-                # extend token TTL when user is active
+                # extend token TTL when user is active (try both cookie and query)
                 token = read_token_from_query()
-                if token:
+                if not token:
+                    # attempt to read token from cookie by asking browser to put it into query param (reader will do that on next run)
+                    pass
+                else:
                     refresh_token_ttl(token)
                 log_action("add_expense", owner, details={"category": category_final, "amount": float(amount)})
                 st.success("✅ Expense saved successfully!")
