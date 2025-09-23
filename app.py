@@ -478,8 +478,6 @@ def show_app():
     token_in_query = read_token_from_query()
     if token_in_query:
         st.components.v1.html(COOKIE_SETTER_HTML, height=10)
-        # after cookie setter runs in browser it will remove the query param (history.replaceState)
-        # but server still has token for this run; next refresh will have no query param.
 
     st.title("💰 Personal Expense Tracker")
 
@@ -511,11 +509,11 @@ def show_app():
         st.markdown(f"<h3 style='text-align:center'>{st.session_state['login_heading']}</h3>", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align:center; font-size:20px; color:#2E8B57; margin-bottom:8px'>{st.session_state['login_tip']}</div>", unsafe_allow_html=True)
 
+        # Updated: do not call st.experimental_rerun() — just update session_state and let Streamlit re-render.
         if st.button("😂 Refresh Tip", key="refresh_tip_center"):
             h, t = get_random_heading_and_tip()
             st.session_state["login_heading"] = h
             st.session_state["login_tip"] = t
-            st.experimental_rerun()
 
         return
 
