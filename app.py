@@ -437,10 +437,11 @@ def show_app():
         return
 
     # Authenticated UI: expense form, admin controls, listing
-    categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Petrol", "Others"]
+    categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Fuel", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
+    Fuel_subcategories = ["Petrol", "Disel", "EV Charge"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
     col1, col2 = st.columns([2,1])
@@ -452,9 +453,9 @@ def show_app():
         elif chosen_cat == "Bill & Investment":
             sub = st.selectbox("Bill & Investment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
             category_final = f"Bill & Investment - {sub}"
-        elif chosen_cat == "Others":
-            custom = st.text_input("Custom category", key="ui_custom_category_key")
-            category_final = custom.strip() if custom else "Others"
+        elif chosen_cat == "Fuel":
+            sub = st.selectbox("Fuel Subcategory", grocery_subcategories, key="ui_grocery_subcat_key")
+            category_final = f"Fuel - {sub}"
         else:
             category_final = chosen_cat
     with col2:
