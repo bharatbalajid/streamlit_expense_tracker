@@ -441,7 +441,7 @@ def show_app():
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
     bill_payment_subcategories = ["CC", "Electricity Bill", "RD", "Mutual Fund", "Gold Chit"]
-    Fuel_subcategories = ["Petrol", "Disel", "EV Charge"]
+    fuel_subcategories = ["Petrol", "Disel", "EV Charge"]
     friends = ["Iyyappa", "Srinath", "Gokul", "Balaji", "Magesh", "Others"]
 
     col1, col2 = st.columns([2,1])
@@ -454,7 +454,7 @@ def show_app():
             sub = st.selectbox("Bill & Investment Subcategory", bill_payment_subcategories, key="ui_bill_subcat_key")
             category_final = f"Bill & Investment - {sub}"
         elif chosen_cat == "Fuel":
-            sub = st.selectbox("Fuel Subcategory", grocery_subcategories, key="ui_grocery_subcat_key")
+            sub = st.selectbox("Fuel Subcategory", fuel_subcategories, key="ui_grocery_subcat_key")
             category_final = f"Fuel - {sub}"
         else:
             category_final = chosen_cat
