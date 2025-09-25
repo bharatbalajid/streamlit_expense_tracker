@@ -1,45 +1,61 @@
 # app.py
 """
-Expense Tracker with Jaeger tracing (hardcoded collector endpoint + service name).
-- Hardcoded Jaeger collector: http://3.208.18.133:14268/api/traces
-- OTLP/4318 disabled to avoid unsolicited OTLP exports
-- Fallback to ConsoleSpanExporter when the collector is unreachable
+Expense Tracker (full) with cookie-backed sessions via small JS snippets.
+- MongoDB backend: users, expenses, audit_logs
+- Redis-backed session tokens (persist across refresh)
+- JS writes session_token cookie and removes token from URL
+- Tanglish funny + money-saving tips on login page (centered)
+- Admin controls: create/reset/delete user, delete expenses, view audit logs
+- PDF export with reportlab (optional)
+- OpenTelemetry tracing (Jaeger collector hardcoded; OTLP auto-init disabled)
 """
 
+# --------------------------
+# IMPORTANT: disable auto OTLP / auto-instrumentation BEFORE importing opentelemetry modules
+# --------------------------
 import os
-# IMPORTANT: set/clear OTLP env BEFORE importing any OpenTelemetry modules
-# This prevents accidental OTLP exporter creation that tries port 4318.
+
+# Turn off auto SDK / auto exporters & OTLP endpoints so nothing auto-sends to :4318
+os.environ["OTEL_SDK_DISABLED"] = "true"  # prevents some auto init flows
+os.environ["OTEL_TRACES_EXPORTER"] = "none"
+os.environ["OTEL_METRICS_EXPORTER"] = "none"
+os.environ["OTEL_LOGS_EXPORTER"] = "none"
+# remove any OTLP endpoints if present
 os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
 os.environ.pop("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", None)
-os.environ["OTEL_TRACES_EXPORTER"] = "jaeger"  # ensure we intend to use jaeger exporter
+os.environ.pop("OTEL_EXPORTER_OTLP_PROTOCOL", None)
+# disable auto instrumentations (best-effort)
+os.environ["OTEL_PYTHON_DISABLED_INSTRUMENTATIONS"] = "*"
 
-# Hardcoded Jaeger config
+# --------------------------
+# Hardcoded Jaeger config (per request)
+# --------------------------
 HARDCODED_JAEGER_COLLECTOR = "http://3.208.18.133:14268/api/traces"
-HARDCODED_SERVICE_NAME = "expense-tracker"
+HARDCODED_OTEL_SERVICE_NAME = "expense-tracker"
 
-# Standard libs
+# --------------------------
+# Standard imports
+# --------------------------
 import io
 import uuid
 import random
 import hashlib
-import socket
 from datetime import datetime, timezone
 from typing import Optional
 
-# Third-party libs
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# Redis optional import
+# Redis should be installed for session persistence
 try:
     import redis
 except Exception:
     redis = None
 
-# reportlab optional
+# Optional ReportLab
 HAS_REPORTLAB = True
 try:
     from reportlab.lib.pagesizes import A4, landscape
@@ -50,87 +66,69 @@ except Exception:
     HAS_REPORTLAB = False
 
 # --------------------------
-# OpenTelemetry tracing init (jaeger thrift). Robust/fallback behavior.
+# Tracing initialization (manual: Jaeger Thrift collector)
+# - wrapped in try/except so failure won't break app.
 # --------------------------
 TRACING_AVAILABLE = False
 tracer = None
 try:
-    # Import OTEL after we've set env vars above
-    import logging
-    logging.getLogger("opentelemetry").setLevel(logging.WARNING)
-
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-    # Use the thrift Jaeger exporter (matches your working manual test)
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 
-    # helper to parse host/port from collector URL
-    from urllib.parse import urlparse
+    # Optional instrumentors (we won't auto-init them; only instrument manually if desired)
+    try:
+        from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+    except Exception:
+        PymongoInstrumentor = None
+    try:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+    except Exception:
+        RedisInstrumentor = None
 
-    def _collector_host_port(collector_url: str):
-        p = urlparse(collector_url)
-        host = p.hostname
-        # The Thrift collector endpoint uses HTTP on port 14268 by default (if not specified)
-        port = p.port or 14268
-        return host, port
+    # create resource and provider
+    resource = Resource.create(attributes={"service.name": HARDCODED_OTEL_SERVICE_NAME})
+    tracer_provider = TracerProvider(resource=resource)
 
-    def _is_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
-        try:
-            with socket.create_connection((host, port), timeout=timeout):
-                return True
-        except Exception:
-            return False
-
-    resource = Resource.create(attributes={"service.name": HARDCODED_SERVICE_NAME})
-    tp = TracerProvider(resource=resource)
-    host, port = _collector_host_port(HARDCODED_JAEGER_COLLECTOR)
-
-    if _is_reachable(host, port):
-        try:
-            jaeger_exporter = JaegerExporter(collector_endpoint=HARDCODED_JAEGER_COLLECTOR)
-            tp.add_span_processor(BatchSpanProcessor(jaeger_exporter))
-            trace.set_tracer_provider(tp)
-            tracer = trace.get_tracer(__name__)
-            TRACING_AVAILABLE = True
-        except Exception:
-            # fallback to console exporter
-            tp.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
-            trace.set_tracer_provider(tp)
-            tracer = trace.get_tracer(__name__)
-            TRACING_AVAILABLE = True
+    # Prefer collector endpoint (hardcoded)
+    if HARDCODED_JAEGER_COLLECTOR:
+        jaeger_exporter = JaegerExporter(collector_endpoint=HARDCODED_JAEGER_COLLECTOR)
     else:
-        # Collector unreachable — use console exporter to avoid connection errors
-        tp.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
-        trace.set_tracer_provider(tp)
-        tracer = trace.get_tracer(__name__)
-        TRACING_AVAILABLE = True
+        # fallback to agent (UDP)
+        jaeger_exporter = JaegerExporter()
+
+    span_processor = BatchSpanProcessor(jaeger_exporter)
+    tracer_provider.add_span_processor(span_processor)
+    trace.set_tracer_provider(tracer_provider)
+    tracer = trace.get_tracer(__name__)
+    TRACING_AVAILABLE = True
 except Exception:
-    # tracing initialization failed gracefully; app continues without tracing.
+    # keep app functional even if tracing won't initialize
     TRACING_AVAILABLE = False
     tracer = None
 
 # --------------------------
-# Streamlit page config
+# Page config
 # --------------------------
 st.set_page_config(page_title="💰 Expense Tracker", layout="wide")
 
 # --------------------------
-# Require redis
+# Require redis (we need persistence across refresh)
 # --------------------------
 if redis is None:
     st.error("`redis` package not installed. Install it with `pip install redis` and restart the app.")
     st.stop()
 
 # --------------------------
-# Redis connection (secrets or env)
+# Redis connection (from secrets or env)
 # --------------------------
 REDIS_URL = None
 if st.secrets and st.secrets.get("redis", {}).get("url"):
     REDIS_URL = st.secrets.get("redis", {}).get("url")
 else:
-    REDIS_URL = os.environ.get("REDIS_URL")
+    REDIS_URL = os.environ.get("REDIS_URL")  # optional env fallback
 
 if not REDIS_URL:
     st.error("Redis URL not configured. Add it to .streamlit/secrets.toml under [redis] url or set REDIS_URL env var.")
@@ -166,35 +164,40 @@ users_col = db["users"]
 audit_col = db["audit_logs"]
 
 # --------------------------
-# Utilities & helpers
+# Helpers
 # --------------------------
+def now_utc():
+    return datetime.now(timezone.utc)
+
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
-def now_utc():
-    # timezone-aware UTC timestamp
-    return datetime.now(timezone.utc)
-
 def log_action(action: str, actor: str, target: str = None, details: dict = None):
+    """Insert audit log. If tracing available, add span metadata."""
     try:
-        payload = {
-            "action": action,
-            "actor": actor,
-            "target": target,
-            "details": details or {},
-            "timestamp": now_utc()
-        }
         if TRACING_AVAILABLE and tracer:
             with tracer.start_as_current_span("audit_log_insert") as span:
                 span.set_attribute("audit.action", action or "")
                 span.set_attribute("audit.actor", actor or "")
                 if target:
                     span.set_attribute("audit.target", target)
-                audit_col.insert_one(payload)
+                audit_col.insert_one({
+                    "action": action,
+                    "actor": actor,
+                    "target": target,
+                    "details": details or {},
+                    "timestamp": now_utc()
+                })
         else:
-            audit_col.insert_one(payload)
+            audit_col.insert_one({
+                "action": action,
+                "actor": actor,
+                "target": target,
+                "details": details or {},
+                "timestamp": now_utc()
+            })
     except Exception:
-        # never crash logs
+        # don't break app on audit failure
         pass
 
 def ensure_superadmin():
@@ -215,7 +218,7 @@ def ensure_superadmin():
 ensure_superadmin()
 
 # --------------------------
-# Session defaults
+# Session defaults (admin UI keys included)
 # --------------------------
 defaults = {
     "authenticated": False,
@@ -224,7 +227,7 @@ defaults = {
     "_login_error": None,
     "login_heading": None,
     "login_tip": None,
-    # admin UI
+    # admin UI keys
     "create_user_username": "",
     "create_user_password": "",
     "create_user_role": "user",
@@ -236,9 +239,9 @@ defaults = {
     "del_all_confirm": False,
     "confirm_delete_selected_key": False,
 }
-for k, v in defaults.items():
+for k, default in defaults.items():
     if k not in st.session_state:
-        st.session_state[k] = v
+        st.session_state[k] = default
 
 # --------------------------
 # Tanglish headings & tips
@@ -252,6 +255,7 @@ tip_headings = [
     "🤑 Budget Scene ku Punch Dialogue",
     "📉 Spend Pannadha… Laugh Pannu Da",
 ]
+
 sample_tips = [
     "😂 ATM la cash illana, adhu unoda saving reminder da!",
     "🍲 Veetla sambar ₹50… hotel la same sambar ₹250. Comedy ah illa?",
@@ -264,6 +268,7 @@ sample_tips = [
     "💡 Light off pannunga da — electric bill ku break poda.",
     "📊 Expense note panni paarunga — small leaks big loss."
 ]
+
 def get_random_heading_and_tip():
     return random.choice(tip_headings), random.choice(sample_tips)
 
@@ -318,7 +323,7 @@ def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
     except Exception:
         return False
 
-# query param helpers
+# helper to set query param (temporary)
 def set_query_token(token: str):
     st.query_params.update({"session_token": token})
 
@@ -334,34 +339,47 @@ def read_token_from_query() -> Optional[str]:
     return val
 
 # --------------------------
-# Cookie <-> URL tiny JS
+# Cookie <-> URL tiny JS helpers
 # --------------------------
 COOKIE_READER_HTML = """
 <script>
 (function(){
+  // if URL already has session_token, do nothing
   const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.has('session_token')) return;
+  if (urlParams.has('session_token')) {
+    // already present — server will handle
+    return;
+  }
+  // read cookie
   function readCookie(name) {
     const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
     return v ? v.pop() : '';
   }
   const token = readCookie('session_token');
   if (token) {
+    // add token to URL to allow server-side restore, this triggers Streamlit rerun
     const newUrl = window.location.pathname + '?session_token=' + encodeURIComponent(token);
     window.location.href = newUrl;
   }
 })();
 </script>
 """
+
 COOKIE_SETTER_HTML = """
 <script>
 (function(){
+  // read session_token from URL and set cookie, then remove it from URL (replaceState)
   const urlParams = new URLSearchParams(window.location.search);
-  if (!urlParams.has('session_token')) return;
+  if (!urlParams.has('session_token')) {
+    // nothing to do
+    return;
+  }
   const token = urlParams.get('session_token');
   if (!token) return;
+  // set cookie for 4 hours (same TTL as Redis)
   const maxAge = 60*60*4;
   document.cookie = 'session_token=' + encodeURIComponent(token) + '; path=/; max-age=' + maxAge + ';';
+  // remove query param without reload
   const cleanUrl = window.location.protocol + '//' + window.location.host + window.location.pathname;
   window.history.replaceState({}, document.title, cleanUrl + window.location.hash);
 })();
@@ -369,29 +387,38 @@ COOKIE_SETTER_HTML = """
 """
 
 # --------------------------
-# Authentication & admin helpers
+# Authentication functions
 # --------------------------
 def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 * 4) -> Optional[str]:
     token = generate_token()
     ok = store_token_in_redis(token, username, ttl_seconds)
     if ok:
-        set_query_token(token)
+        set_query_token(token)  # temporarily put in URL so JS can pick it up and set cookie
         return token
     return None
 
 def restore_session_from_url_token():
     token = read_token_from_query()
     if token and not st.session_state.get("authenticated"):
-        username = get_username_from_token(token)
-        if username:
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = username
-            u = users_col.find_one({"username": username})
-            st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
-            log_action("session_restored", username)
-            if TRACING_AVAILABLE and tracer:
-                with tracer.start_as_current_span("session_restored") as span:
-                    span.set_attribute("user", username)
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("restore_session_from_url_token") as span:
+                span.set_attribute("token.present", bool(token))
+                username = get_username_from_token(token)
+                if username:
+                    st.session_state["authenticated"] = True
+                    st.session_state["username"] = username
+                    u = users_col.find_one({"username": username})
+                    st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
+                    log_action("session_restored", username)
+                return
+        else:
+            username = get_username_from_token(token)
+            if username:
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = username
+                u = users_col.find_one({"username": username})
+                st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
+                log_action("session_restored", username)
 
 def clear_url_token_and_redis():
     token = read_token_from_query()
@@ -409,25 +436,31 @@ def login():
         st.session_state["_login_error"] = "Provide both username and password."
         return
     u = users_col.find_one({"username": user})
-    if not u or u.get("password_hash") != hash_password(pwd):
+    if not u:
         st.session_state["_login_error"] = "Invalid username or password."
         return
-    st.session_state["authenticated"] = True
-    st.session_state["username"] = user
-    st.session_state["is_admin"] = (u.get("role") == "admin")
-    st.session_state["_login_error"] = None
-    create_redis_session_and_set_url(user)
-    log_action("login", user)
-    if TRACING_AVAILABLE and tracer:
-        with tracer.start_as_current_span("user_login") as span:
-            span.set_attribute("user", user)
+    if u.get("password_hash") == hash_password(pwd):
+        st.session_state["authenticated"] = True
+        st.session_state["username"] = user
+        st.session_state["is_admin"] = (u.get("role") == "admin")
+        st.session_state["_login_error"] = None
+        # create redis session and set URL param temporarily -> JS will convert to cookie and clean URL
+        create_redis_session_and_set_url(user)
+        log_action("login", user)
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("user_login") as span:
+                span.set_attribute("user", user)
+    else:
+        st.session_state["_login_error"] = "Invalid username or password."
 
 def logout():
     user = st.session_state.get("username")
     log_action("logout", user)
+    # delete cookie and remove redis token (if present in query)
     st.components.v1.html("""
     <script>
       document.cookie = "session_token=; path=/; max-age=0;";
+      // also reload to let server clear session if needed
       setTimeout(function(){ window.location.href = window.location.pathname; }, 200);
     </script>
     """, height=80)
@@ -443,6 +476,9 @@ def logout():
         with tracer.start_as_current_span("user_logout") as span:
             span.set_attribute("user", user or "")
 
+# --------------------------
+# Admin helpers
+# --------------------------
 def create_user(username: str, password: str, role: str = "user"):
     username = (username or "").strip()
     if not username or not password:
@@ -482,28 +518,40 @@ def delete_user(target_username: str, delete_expenses: bool = False):
     if not target_username:
         st.error("Select a user to delete.")
         return
-    span_ctx = None
+
     if TRACING_AVAILABLE and tracer:
         span_ctx = tracer.start_as_current_span("delete_user")
+    else:
+        span_ctx = None
+
     try:
         if span_ctx:
             span_ctx.__enter__()
             span_ctx.set_attribute("target.username", target_username)
             span_ctx.set_attribute("delete_expenses", bool(delete_expenses))
+
+        # delete user
         result = users_col.delete_one({"username": target_username})
+        # delete expenses optionally
         exp_result = None
         if delete_expenses:
             exp_result = collection.delete_many({"owner": target_username})
+
         if result.deleted_count == 0:
             st.warning(f"No user record found for '{target_username}'.")
-            if delete_expenses and exp_result and exp_result.deleted_count > 0:
-                st.info(f"User not found, but {exp_result.deleted_count} expense(s) for '{target_username}' were deleted.")
-                log_action("delete_user_expenses_only", st.session_state.get("username"), target=target_username, details={"deleted_expenses": exp_result.deleted_count})
+            if delete_expenses:
+                if exp_result and exp_result.deleted_count > 0:
+                    st.info(f"User not found, but {exp_result.deleted_count} expense(s) owned by '{target_username}' were deleted.")
+                    log_action("delete_user_expenses_only", st.session_state.get("username"), target=target_username, details={"deleted_expenses": exp_result.deleted_count})
             return
-        if exp_result and exp_result.deleted_count > 0:
+
+        if exp_result and exp_result.deleted_count == 0 and delete_expenses:
+            st.info(f"User '{target_username}' deleted, but no expenses were found for that user.")
+        elif exp_result and exp_result.deleted_count > 0:
             st.success(f"User '{target_username}' and {exp_result.deleted_count} expense(s) deleted.")
         else:
             st.success(f"User '{target_username}' deleted.")
+
         log_action("delete_user", st.session_state.get("username"), target=target_username, details={"deleted_expenses": delete_expenses})
     finally:
         if span_ctx:
@@ -515,36 +563,71 @@ def delete_user(target_username: str, delete_expenses: bool = False):
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     if not HAS_REPORTLAB:
         raise RuntimeError("reportlab not available")
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-    styles = getSampleStyleSheet()
-    elems = []
-    elems.append(Paragraph(title, styles["Title"]))
-    elems.append(Spacer(1, 12))
-    total = df["amount"].sum() if "amount" in df.columns else 0.0
-    elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
-    elems.append(Spacer(1, 12))
-    df_export = df.copy()
-    if "timestamp" in df_export.columns:
-        df_export["timestamp"] = df_export["timestamp"].astype(str)
-    cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
-    table_data = [cols]
-    for _, r in df_export.iterrows():
-        table_data.append([str(r.get(c, "")) for c in cols])
-    tbl = Table(table_data, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2b2b2b")),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
-        ("FONTSIZE", (0,0), (-1,-1), 8),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-    ]))
-    elems.append(tbl)
-    doc.build(elems)
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-    return pdf_bytes
+
+    if TRACING_AVAILABLE and tracer:
+        with tracer.start_as_current_span("generate_pdf_bytes") as span:
+            span.set_attribute("pdf.title", title)
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+            styles = getSampleStyleSheet()
+            elems = []
+            elems.append(Paragraph(title, styles["Title"]))
+            elems.append(Spacer(1, 12))
+            total = df["amount"].sum() if "amount" in df.columns else 0.0
+            elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
+            elems.append(Spacer(1, 12))
+            df_export = df.copy()
+            if "timestamp" in df_export.columns:
+                df_export["timestamp"] = df_export["timestamp"].astype(str)
+            cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
+            table_data = [cols]
+            for _, r in df_export.iterrows():
+                table_data.append([str(r.get(c, "")) for c in cols])
+            tbl = Table(table_data, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2b2b2b")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+                ("FONTSIZE", (0,0), (-1,-1), 8),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ]))
+            elems.append(tbl)
+            doc.build(elems)
+            pdf_bytes = buffer.getvalue()
+            buffer.close()
+            return pdf_bytes
+    else:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+        styles = getSampleStyleSheet()
+        elems = []
+        elems.append(Paragraph(title, styles["Title"]))
+        elems.append(Spacer(1, 12))
+        total = df["amount"].sum() if "amount" in df.columns else 0.0
+        elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
+        elems.append(Spacer(1, 12))
+        df_export = df.copy()
+        if "timestamp" in df_export.columns:
+            df_export["timestamp"] = df_export["timestamp"].astype(str)
+        cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
+        table_data = [cols]
+        for _, r in df_export.iterrows():
+            table_data.append([str(r.get(c, "")) for c in cols])
+        tbl = Table(table_data, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2b2b2b")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+            ("FONTSIZE", (0,0), (-1,-1), 8),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ]))
+        elems.append(tbl)
+        doc.build(elems)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return pdf_bytes
 
 def generate_friend_pdf_bytes(friend_name: str) -> bytes:
     if not friend_name:
@@ -576,19 +659,23 @@ def get_visible_docs():
 # Main UI
 # --------------------------
 def show_app():
+    # If not authenticated and no token in URL, inject cookie reader JS
     token_in_query = read_token_from_query()
     if not st.session_state.get("authenticated") and not token_in_query:
+        # cookie reader will redirect (by adding ?session_token=...) if cookie exists, triggering a Streamlit rerun
         st.components.v1.html(COOKIE_READER_HTML, height=10)
 
+    # If URL has token, server-side restore will pick it up
     restore_session_from_url_token()
 
+    # If after restore we still have token in URL, inject cookie-setter to persist to cookie and clean URL
     token_in_query = read_token_from_query()
     if token_in_query:
         st.components.v1.html(COOKIE_SETTER_HTML, height=10)
 
     st.title("💰 Personal Expense Tracker")
 
-    # Sidebar
+    # Sidebar: Login / Logout + trace status & jaeger info
     with st.sidebar:
         st.header("🔒 Account")
         if not st.session_state["authenticated"]:
@@ -602,27 +689,38 @@ def show_app():
             if st.session_state["is_admin"]:
                 st.success("Admin")
             st.button("Logout", on_click=logout, key="logout_button")
-        st.markdown("---")
-        st.markdown(f"**Tracing:** {'enabled' if TRACING_AVAILABLE else 'disabled (OTLP disabled/fallback)'}")
-        st.markdown(f"**Jaeger collector:** {HARDCODED_JAEGER_COLLECTOR}")
-        st.markdown(f"**Service name:** {HARDCODED_SERVICE_NAME}")
 
+        st.markdown("---")
+        if TRACING_AVAILABLE:
+            st.success("Tracing: enabled")
+            st.write("Jaeger collector:")
+            st.write(HARDCODED_JAEGER_COLLECTOR)
+            st.write("Service name:")
+            st.write(HARDCODED_OTEL_SERVICE_NAME)
+        else:
+            st.error("Tracing: disabled (OTLP disabled / fallback)")
+
+    # If not authenticated: show centered Tanglish tip & heading
     if not st.session_state["authenticated"]:
         st.info("🔒 Please log in from the sidebar to access the Expense Tracker.")
         st.markdown("---")
+
         if not st.session_state.get("login_heading") or not st.session_state.get("login_tip"):
             h, t = get_random_heading_and_tip()
             st.session_state["login_heading"] = h
             st.session_state["login_tip"] = t
+
         st.markdown(f"<h3 style='text-align:center'>{st.session_state['login_heading']}</h3>", unsafe_allow_html=True)
         st.markdown(f"<div style='text-align:center; font-size:20px; color:#2E8B57; margin-bottom:8px'>{st.session_state['login_tip']}</div>", unsafe_allow_html=True)
+
         if st.button("😂 Refresh Tip", key="refresh_tip_center"):
             h, t = get_random_heading_and_tip()
             st.session_state["login_heading"] = h
             st.session_state["login_tip"] = t
+
         return
 
-    # Authenticated UI (expense form + admin)
+    # Authenticated UI
     categories = ["Food", "Cinema", "Groceries", "Bill & Investment", "Medical", "Fuel", "Others"]
     grocery_subcategories = ["Vegetables", "Fruits", "Milk & Dairy", "Rice & Grains", "Lentils & Pulses",
                              "Spices & Masalas", "Oil & Ghee", "Snacks & Packaged Items", "Bakery & Beverages"]
@@ -656,12 +754,13 @@ def show_app():
             friend_final = chosen_friend
 
     st.markdown("---")
+
     with st.form("expense_form", clear_on_submit=True):
-        expense_date = st.date_input("Date", value=datetime.now().date(), key="expense_date_key")
+        expense_date = st.date_input("Date", value=now_utc().date(), key="expense_date_key")
         amount = st.number_input("Amount (₹)", min_value=1.0, step=1.0, key="expense_amount_key")
         notes = st.text_area("Comments / Notes (optional)", key="expense_notes_key")
         if st.form_submit_button("💾 Save Expense", key="submit_expense_key"):
-            ts = datetime.combine(expense_date, datetime.min.time())
+            ts = datetime.combine(expense_date, datetime.min.time()).replace(tzinfo=timezone.utc)
             owner = st.session_state["username"]
             try:
                 if TRACING_AVAILABLE and tracer:
@@ -686,6 +785,8 @@ def show_app():
                         "timestamp": ts,
                         "owner": owner
                     })
+
+                # extend token TTL when user is active (try both cookie and query)
                 token = read_token_from_query()
                 if token:
                     refresh_token_ttl(token)
@@ -694,9 +795,12 @@ def show_app():
             except Exception as e:
                 st.error(f"Failed to save expense: {e}")
 
-    # Admin controls
+    # --------------------------
+    # Admin Controls (single reset icon clears admin forms)
+    # --------------------------
     if st.session_state.get("is_admin"):
         st.markdown("---")
+
         def reset_admin_forms():
             st.session_state["create_user_username"] = ""
             st.session_state["create_user_password"] = ""
@@ -716,6 +820,7 @@ def show_app():
         with admin_col_right:
             st.button("🔁 Reset Admin Forms", key="reset_admin_forms_btn", help="Clear admin form inputs (does not modify DB)", on_click=reset_admin_forms)
 
+        # Create User
         with st.expander("Create User"):
             cu_name = st.text_input("New username", key="create_user_username")
             cu_pass = st.text_input("New password", type="password", key="create_user_password")
@@ -725,6 +830,7 @@ def show_app():
                 if st.button("Create User", key="create_user_btn"):
                     create_user(cu_name, cu_pass, cu_role)
 
+        # Reset Password
         with st.expander("Reset Password"):
             users_list_reset = [d["username"] for d in users_col.find({}, {"username": 1}) if d["username"] != st.session_state["username"]]
             if users_list_reset:
@@ -740,6 +846,7 @@ def show_app():
             else:
                 st.info("No other users available for reset.")
 
+        # Delete User
         with st.expander("Delete User"):
             users_list_del = [d["username"] for d in users_col.find({}, {"username": 1})
                               if d["username"] != st.session_state["username"]
@@ -787,7 +894,9 @@ def show_app():
             else:
                 st.info("No audit logs yet.")
 
-    # Show expenses
+    # ----------------------
+    # Show visible expenses
+    # ----------------------
     docs = get_visible_docs()
     if docs:
         df = pd.DataFrame(docs)
@@ -802,6 +911,7 @@ def show_app():
         st.subheader("📊 All Expenses (Visible to you)")
         st.dataframe(df)
 
+        # PDF download
         try:
             df_download = df.copy()
             if "_id" in df_download.columns:
@@ -846,7 +956,7 @@ def show_app():
         else:
             st.info("No friend summary yet.")
 
-        # Admin delete selected expenses UI
+        # Admin: delete selected expenses
         if st.session_state.get("is_admin"):
             st.markdown("---")
             st.write("Delete individual expenses (admin)")
@@ -866,11 +976,13 @@ def show_app():
                             try:
                                 result = collection.delete_one({"_id": ObjectId(did)})
                             except Exception:
+                                # if converting to ObjectId failed or original id stored as string
                                 result = collection.delete_one({"_id": did})
                             if result.deleted_count == 0:
                                 not_found.append(did)
                             else:
                                 deleted_ids.append(did)
+
                         if deleted_ids:
                             log_action("delete_selected_expenses", st.session_state["username"], details={"ids": deleted_ids})
                         if not_found and deleted_ids:
@@ -883,7 +995,7 @@ def show_app():
         st.info("No expenses to show.")
 
 # --------------------------
-# Run app
+# Run
 # --------------------------
 if __name__ == "__main__":
     show_app()
