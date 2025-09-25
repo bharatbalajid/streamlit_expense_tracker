@@ -7,7 +7,7 @@ Expense Tracker (full) with cookie-backed sessions via small JS snippets.
 - Tanglish funny + money-saving tips on login page (centered)
 - Admin controls: create/reset/delete user, delete expenses, view audit logs
 - PDF export with reportlab (optional)
-- OpenTelemetry tracing (Jaeger collector/agent fallback) + auto-instrumentation
+- OpenTelemetry tracing (Jaeger collector hardcoded; agent fallback)
 """
 
 import os
@@ -41,21 +41,15 @@ except Exception:
     HAS_REPORTLAB = False
 
 # --------------------------
-# Prefer Streamlit secrets for Jaeger if available
+# Hardcoded Jaeger config (per your request)
 # --------------------------
-try:
-    if st.secrets and st.secrets.get("jaeger"):
-        jaeger_conf = st.secrets["jaeger"]
-        if jaeger_conf.get("collector_endpoint"):
-            os.environ["JAEGER_COLLECTOR_ENDPOINT"] = jaeger_conf["collector_endpoint"]
-        if jaeger_conf.get("service_name"):
-            os.environ["OTEL_SERVICE_NAME"] = jaeger_conf["service_name"]
-except Exception:
-    # non-fatal; continue even if secrets missing or malformed
-    pass
+# Collector endpoint (HTTP thrift collector)
+HARDCODED_JAEGER_COLLECTOR = "http://3.208.18.133:14268/api/traces"
+# Service name that will appear in Jaeger UI
+HARDCODED_OTEL_SERVICE_NAME = "expense-tracker"
 
 # --------------------------
-# --- tracing (OpenTelemetry + Jaeger exporter)
+# --- tracing (OpenTelemetry + Jaeger exporter) - hardcoded values used here
 # --------------------------
 try:
     from opentelemetry import trace
@@ -64,7 +58,7 @@ try:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.jaeger.thrift import JaegerExporter
 
-    # Auto-instrumentation modules (optional)
+    # Optional instrumentations
     try:
         from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
     except Exception:
@@ -74,29 +68,23 @@ try:
     except Exception:
         RedisInstrumentor = None
 
-    SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "expense-tracker")
-
-    # Collector (HTTP) endpoint expected like: http://3.208.18.133:14268/api/traces
-    jaeger_collector = os.environ.get("JAEGER_COLLECTOR_ENDPOINT", "http://3.208.18.133:14268/api/traces")
-    jaeger_agent_host = os.environ.get("JAEGER_AGENT_HOST", "localhost")
-    jaeger_agent_port = int(os.environ.get("JAEGER_AGENT_PORT", 6831))
-
-    resource = Resource.create(attributes={"service.name": "expense-tracker"})
+    # Create tracer provider with the hardcoded service name
+    resource = Resource.create(attributes={"service.name": HARDCODED_OTEL_SERVICE_NAME})
     tracer_provider = TracerProvider(resource=resource)
 
-    if jaeger_collector:
-        # use collector (HTTP)
-        jaeger_exporter = JaegerExporter(collector_endpoint=jaeger_collector)
+    # Prefer HTTP collector (hardcoded); if collector string empty/falsy, fallback to agent
+    if HARDCODED_JAEGER_COLLECTOR:
+        jaeger_exporter = JaegerExporter(collector_endpoint=HARDCODED_JAEGER_COLLECTOR)
     else:
-        # fallback to agent (UDP)
-        jaeger_exporter = JaegerExporter(agent_host_name=jaeger_agent_host, agent_port=jaeger_agent_port)
+        # fallback (should not be used because we hardcoded collector) - agent defaults
+        jaeger_exporter = JaegerExporter(agent_host_name="localhost", agent_port=6831)
 
     span_processor = BatchSpanProcessor(jaeger_exporter)
     tracer_provider.add_span_processor(span_processor)
     trace.set_tracer_provider(tracer_provider)
     tracer = trace.get_tracer(__name__)
 
-    # Try to auto-instrument pymongo & redis (if instrumentors are available)
+    # Try to auto-instrument pymongo & redis (if instrumentors are present)
     try:
         if PymongoInstrumentor:
             PymongoInstrumentor().instrument()
@@ -110,6 +98,7 @@ try:
 
     TRACING_AVAILABLE = True
 except Exception:
+    # tracing init failed — keep app functional without tracing
     TRACING_AVAILABLE = False
     tracer = None
 
@@ -177,9 +166,10 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
     try:
         if TRACING_AVAILABLE and tracer:
             with tracer.start_as_current_span("audit_log_insert") as span:
-                span.set_attribute("audit.action", action)
+                span.set_attribute("audit.action", action or "")
                 span.set_attribute("audit.actor", actor or "")
-                span.set_attribute("audit.target", target or "")
+                if target:
+                    span.set_attribute("audit.target", target)
                 audit_col.insert_one({
                     "action": action,
                     "actor": actor,
