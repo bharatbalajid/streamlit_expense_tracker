@@ -77,11 +77,11 @@ try:
     SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "expense-tracker")
 
     # Collector (HTTP) endpoint expected like: http://3.208.18.133:14268/api/traces
-    jaeger_collector = os.environ.get("JAEGER_COLLECTOR_ENDPOINT")
+    jaeger_collector = os.environ.get("JAEGER_COLLECTOR_ENDPOINT", "http://3.208.18.133:14268/api/traces")
     jaeger_agent_host = os.environ.get("JAEGER_AGENT_HOST", "localhost")
     jaeger_agent_port = int(os.environ.get("JAEGER_AGENT_PORT", 6831))
 
-    resource = Resource.create(attributes={"service.name": SERVICE_NAME})
+    resource = Resource.create(attributes={"service.name": "expense-tracker"})
     tracer_provider = TracerProvider(resource=resource)
 
     if jaeger_collector:
