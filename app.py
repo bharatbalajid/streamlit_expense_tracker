@@ -7,7 +7,7 @@ Expense Tracker (full) with cookie-backed sessions via small JS snippets.
 - Tanglish funny + money-saving tips on login page (centered)
 - Admin controls: create/reset/delete user, delete expenses, view audit logs
 - PDF export with reportlab (optional)
-- OpenTelemetry tracing (Jaeger collector hardcoded; agent fallback)
+- OpenTelemetry tracing (OTLP → Jaeger collector hardcoded; agent fallback no longer used)
 """
 
 import os
@@ -41,24 +41,20 @@ except Exception:
     HAS_REPORTLAB = False
 
 # --------------------------
-# Hardcoded Jaeger config (per your request)
+# Hardcoded OTLP / OpenTelemetry config (recommended)
 # --------------------------
-# Collector endpoint (HTTP thrift collector)
-HARDCODED_JAEGER_COLLECTOR = "http://3.208.18.133:14268/api/traces"
-# Service name that will appear in Jaeger UI
+# OTLP HTTP endpoint that Jaeger collector exposes: use 4318/v1/traces (hardcoded per request)
+HARDCODED_OTLP_ENDPOINT = "http://3.208.18.133:4318/v1/traces"
 HARDCODED_OTEL_SERVICE_NAME = "expense-tracker"
 
-# --------------------------
-# --- tracing (OpenTelemetry + Jaeger exporter) - hardcoded values used here
-# --------------------------
 try:
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-    # Optional instrumentations
+    # optional instrumentations (safe to fail if not installed)
     try:
         from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
     except Exception:
@@ -68,23 +64,17 @@ try:
     except Exception:
         RedisInstrumentor = None
 
-    # Create tracer provider with the hardcoded service name
     resource = Resource.create(attributes={"service.name": HARDCODED_OTEL_SERVICE_NAME})
     tracer_provider = TracerProvider(resource=resource)
 
-    # Prefer HTTP collector (hardcoded); if collector string empty/falsy, fallback to agent
-    if HARDCODED_JAEGER_COLLECTOR:
-        jaeger_exporter = JaegerExporter(collector_endpoint=HARDCODED_JAEGER_COLLECTOR)
-    else:
-        # fallback (should not be used because we hardcoded collector) - agent defaults
-        jaeger_exporter = JaegerExporter(agent_host_name="localhost", agent_port=6831)
-
-    span_processor = BatchSpanProcessor(jaeger_exporter)
+    otlp_exporter = OTLPSpanExporter(endpoint=HARDCODED_OTLP_ENDPOINT)
+    span_processor = BatchSpanProcessor(otlp_exporter)
     tracer_provider.add_span_processor(span_processor)
+
     trace.set_tracer_provider(tracer_provider)
     tracer = trace.get_tracer(__name__)
 
-    # Try to auto-instrument pymongo & redis (if instrumentors are present)
+    # auto-instrumentation best-effort
     try:
         if PymongoInstrumentor:
             PymongoInstrumentor().instrument()
@@ -98,7 +88,7 @@ try:
 
     TRACING_AVAILABLE = True
 except Exception:
-    # tracing init failed — keep app functional without tracing
+    # tracing initialization failed — proceed without tracing but keep app functional
     TRACING_AVAILABLE = False
     tracer = None
 
@@ -115,7 +105,7 @@ if redis is None:
     st.stop()
 
 # --------------------------
-# Redis connection (from secrets or env)
+# Redis connection (from env or streamlit secrets)
 # --------------------------
 REDIS_URL = None
 if st.secrets and st.secrets.get("redis", {}).get("url"):
@@ -135,7 +125,7 @@ except Exception as e:
     st.stop()
 
 # --------------------------
-# MongoDB connection
+# MongoDB connection (from env or streamlit secrets)
 # --------------------------
 if st.secrets and st.secrets.get("mongo", {}).get("uri"):
     MONGO_URI = st.secrets.get("mongo", {}).get("uri")
@@ -186,9 +176,11 @@ def log_action(action: str, actor: str, target: str = None, details: dict = None
                 "timestamp": datetime.utcnow()
             })
     except Exception:
+        # don't break the app if auditing fails
         pass
 
 def ensure_superadmin():
+    # if admin credentials provided via streamlit secrets, create superadmin; otherwise do nothing
     if not st.secrets:
         return
     secret_user = st.secrets.get("admin", {}).get("username")
