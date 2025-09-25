@@ -7,6 +7,7 @@ Expense Tracker (full) with cookie-backed sessions via small JS snippets.
 - Tanglish funny + money-saving tips on login page (centered)
 - Admin controls: create/reset/delete user, delete expenses, view audit logs
 - PDF export with reportlab (optional)
+- OpenTelemetry tracing (Jaeger collector/agent fallback) + auto-instrumentation
 """
 
 import os
@@ -38,6 +39,79 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 except Exception:
     HAS_REPORTLAB = False
+
+# --------------------------
+# Prefer Streamlit secrets for Jaeger if available
+# --------------------------
+try:
+    if st.secrets and st.secrets.get("jaeger"):
+        jaeger_conf = st.secrets["jaeger"]
+        if jaeger_conf.get("collector_endpoint"):
+            os.environ["JAEGER_COLLECTOR_ENDPOINT"] = jaeger_conf["collector_endpoint"]
+        if jaeger_conf.get("service_name"):
+            os.environ["OTEL_SERVICE_NAME"] = jaeger_conf["service_name"]
+except Exception:
+    # non-fatal; continue even if secrets missing or malformed
+    pass
+
+# --------------------------
+# --- tracing (OpenTelemetry + Jaeger exporter)
+# --------------------------
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+
+    # Auto-instrumentation modules (optional)
+    try:
+        from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
+    except Exception:
+        PymongoInstrumentor = None
+    try:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+    except Exception:
+        RedisInstrumentor = None
+
+    SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "expense-tracker")
+
+    # Collector (HTTP) endpoint expected like: http://3.208.18.133:14268/api/traces
+    jaeger_collector = os.environ.get("JAEGER_COLLECTOR_ENDPOINT")
+    jaeger_agent_host = os.environ.get("JAEGER_AGENT_HOST", "localhost")
+    jaeger_agent_port = int(os.environ.get("JAEGER_AGENT_PORT", 6831))
+
+    resource = Resource.create(attributes={"service.name": SERVICE_NAME})
+    tracer_provider = TracerProvider(resource=resource)
+
+    if jaeger_collector:
+        # use collector (HTTP)
+        jaeger_exporter = JaegerExporter(collector_endpoint=jaeger_collector)
+    else:
+        # fallback to agent (UDP)
+        jaeger_exporter = JaegerExporter(agent_host_name=jaeger_agent_host, agent_port=jaeger_agent_port)
+
+    span_processor = BatchSpanProcessor(jaeger_exporter)
+    tracer_provider.add_span_processor(span_processor)
+    trace.set_tracer_provider(tracer_provider)
+    tracer = trace.get_tracer(__name__)
+
+    # Try to auto-instrument pymongo & redis (if instrumentors are available)
+    try:
+        if PymongoInstrumentor:
+            PymongoInstrumentor().instrument()
+    except Exception:
+        pass
+    try:
+        if RedisInstrumentor:
+            RedisInstrumentor().instrument()
+    except Exception:
+        pass
+
+    TRACING_AVAILABLE = True
+except Exception:
+    TRACING_AVAILABLE = False
+    tracer = None
 
 # --------------------------
 # Page config
@@ -101,13 +175,26 @@ def hash_password(password: str) -> str:
 
 def log_action(action: str, actor: str, target: str = None, details: dict = None):
     try:
-        audit_col.insert_one({
-            "action": action,
-            "actor": actor,
-            "target": target,
-            "details": details or {},
-            "timestamp": datetime.utcnow()
-        })
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("audit_log_insert") as span:
+                span.set_attribute("audit.action", action)
+                span.set_attribute("audit.actor", actor or "")
+                span.set_attribute("audit.target", target or "")
+                audit_col.insert_one({
+                    "action": action,
+                    "actor": actor,
+                    "target": target,
+                    "details": details or {},
+                    "timestamp": datetime.utcnow()
+                })
+        else:
+            audit_col.insert_one({
+                "action": action,
+                "actor": actor,
+                "target": target,
+                "details": details or {},
+                "timestamp": datetime.utcnow()
+            })
     except Exception:
         pass
 
@@ -191,25 +278,46 @@ def generate_token() -> str:
 
 def store_token_in_redis(token: str, username: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
     try:
-        return redis_client.setex(f"session:{token}", ttl_seconds, username)
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("redis_set_session") as span:
+                span.set_attribute("session.token", token)
+                span.set_attribute("session.username", username)
+                return redis_client.setex(f"session:{token}", ttl_seconds, username)
+        else:
+            return redis_client.setex(f"session:{token}", ttl_seconds, username)
     except Exception:
         return False
 
 def get_username_from_token(token: str) -> Optional[str]:
     try:
-        return redis_client.get(f"session:{token}")
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("redis_get_session") as span:
+                span.set_attribute("session.token", token)
+                return redis_client.get(f"session:{token}")
+        else:
+            return redis_client.get(f"session:{token}")
     except Exception:
         return None
 
 def delete_token(token: str) -> bool:
     try:
-        return bool(redis_client.delete(f"session:{token}"))
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("redis_delete_session") as span:
+                span.set_attribute("session.token", token)
+                return bool(redis_client.delete(f"session:{token}"))
+        else:
+            return bool(redis_client.delete(f"session:{token}"))
     except Exception:
         return False
 
 def refresh_token_ttl(token: str, ttl_seconds: int = 60 * 60 * 4) -> bool:
     try:
-        return redis_client.expire(f"session:{token}", ttl_seconds)
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("redis_refresh_ttl") as span:
+                span.set_attribute("session.token", token)
+                return redis_client.expire(f"session:{token}", ttl_seconds)
+        else:
+            return redis_client.expire(f"session:{token}", ttl_seconds)
     except Exception:
         return False
 
@@ -290,13 +398,25 @@ def create_redis_session_and_set_url(username: str, ttl_seconds: int = 60 * 60 *
 def restore_session_from_url_token():
     token = read_token_from_query()
     if token and not st.session_state.get("authenticated"):
-        username = get_username_from_token(token)
-        if username:
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = username
-            u = users_col.find_one({"username": username})
-            st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
-            log_action("session_restored", username)
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("restore_session_from_url_token") as span:
+                span.set_attribute("token.present", bool(token))
+                username = get_username_from_token(token)
+                if username:
+                    st.session_state["authenticated"] = True
+                    st.session_state["username"] = username
+                    u = users_col.find_one({"username": username})
+                    st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
+                    log_action("session_restored", username)
+                return
+        else:
+            username = get_username_from_token(token)
+            if username:
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = username
+                u = users_col.find_one({"username": username})
+                st.session_state["is_admin"] = (u.get("role") == "admin") if u else False
+                log_action("session_restored", username)
 
 def clear_url_token_and_redis():
     token = read_token_from_query()
@@ -325,6 +445,9 @@ def login():
         # create redis session and set URL param temporarily -> JS will convert to cookie and clean URL
         create_redis_session_and_set_url(user)
         log_action("login", user)
+        if TRACING_AVAILABLE and tracer:
+            with tracer.start_as_current_span("user_login") as span:
+                span.set_attribute("user", user)
     else:
         st.session_state["_login_error"] = "Invalid username or password."
 
@@ -347,6 +470,9 @@ def logout():
     st.session_state["username"] = None
     st.session_state["is_admin"] = False
     st.session_state["_login_error"] = None
+    if TRACING_AVAILABLE and tracer:
+        with tracer.start_as_current_span("user_logout") as span:
+            span.set_attribute("user", user or "")
 
 # --------------------------
 # Admin helpers
@@ -366,6 +492,10 @@ def create_user(username: str, password: str, role: str = "user"):
         "created_at": datetime.utcnow()
     })
     log_action("create_user", st.session_state.get("username"), target=username, details={"role": role})
+    if TRACING_AVAILABLE and tracer:
+        with tracer.start_as_current_span("create_user") as span:
+            span.set_attribute("created.username", username)
+            span.set_attribute("created.role", role)
     st.success(f"User '{username}' created with role '{role}'.")
 
 def reset_user_password(target_username: str, new_password: str):
@@ -377,6 +507,9 @@ def reset_user_password(target_username: str, new_password: str):
         st.warning(f"No user record found for '{target_username}'.")
         return
     log_action("reset_password", st.session_state.get("username"), target=target_username)
+    if TRACING_AVAILABLE and tracer:
+        with tracer.start_as_current_span("reset_user_password") as span:
+            span.set_attribute("target.user", target_username)
     st.success(f"Password for '{target_username}' has been reset.")
 
 def delete_user(target_username: str, delete_expenses: bool = False):
@@ -384,31 +517,43 @@ def delete_user(target_username: str, delete_expenses: bool = False):
         st.error("Select a user to delete.")
         return
 
-    # delete user
-    result = users_col.delete_one({"username": target_username})
-    # delete expenses optionally
-    exp_result = None
-    if delete_expenses:
-        exp_result = collection.delete_many({"owner": target_username})
-
-    if result.deleted_count == 0:
-        st.warning(f"No user record found for '{target_username}'.")
-        # If user not found but delete_expenses was requested, still report on expense deletions
-        if delete_expenses:
-            if exp_result and exp_result.deleted_count > 0:
-                st.info(f"User not found, but {exp_result.deleted_count} expense(s) owned by '{target_username}' were deleted.")
-                log_action("delete_user_expenses_only", st.session_state.get("username"), target=target_username, details={"deleted_expenses": exp_result.deleted_count})
-        return
-
-    # success path
-    if exp_result and exp_result.deleted_count == 0 and delete_expenses:
-        st.info(f"User '{target_username}' deleted, but no expenses were found for that user.")
-    elif exp_result and exp_result.deleted_count > 0:
-        st.success(f"User '{target_username}' and {exp_result.deleted_count} expense(s) deleted.")
+    if TRACING_AVAILABLE and tracer:
+        span_ctx = tracer.start_as_current_span("delete_user")
     else:
-        st.success(f"User '{target_username}' deleted.")
+        span_ctx = None
 
-    log_action("delete_user", st.session_state.get("username"), target=target_username, details={"deleted_expenses": delete_expenses})
+    try:
+        if span_ctx:
+            span_ctx.__enter__()
+            span_ctx.set_attribute("target.username", target_username)
+            span_ctx.set_attribute("delete_expenses", bool(delete_expenses))
+
+        # delete user
+        result = users_col.delete_one({"username": target_username})
+        # delete expenses optionally
+        exp_result = None
+        if delete_expenses:
+            exp_result = collection.delete_many({"owner": target_username})
+
+        if result.deleted_count == 0:
+            st.warning(f"No user record found for '{target_username}'.")
+            if delete_expenses:
+                if exp_result and exp_result.deleted_count > 0:
+                    st.info(f"User not found, but {exp_result.deleted_count} expense(s) owned by '{target_username}' were deleted.")
+                    log_action("delete_user_expenses_only", st.session_state.get("username"), target=target_username, details={"deleted_expenses": exp_result.deleted_count})
+            return
+
+        if exp_result and exp_result.deleted_count == 0 and delete_expenses:
+            st.info(f"User '{target_username}' deleted, but no expenses were found for that user.")
+        elif exp_result and exp_result.deleted_count > 0:
+            st.success(f"User '{target_username}' and {exp_result.deleted_count} expense(s) deleted.")
+        else:
+            st.success(f"User '{target_username}' deleted.")
+
+        log_action("delete_user", st.session_state.get("username"), target=target_username, details={"deleted_expenses": delete_expenses})
+    finally:
+        if span_ctx:
+            span_ctx.__exit__(None, None, None)
 
 # --------------------------
 # PDF helpers
@@ -416,36 +561,71 @@ def delete_user(target_username: str, delete_expenses: bool = False):
 def generate_pdf_bytes(df: pd.DataFrame, title: str = "Expense Report") -> bytes:
     if not HAS_REPORTLAB:
         raise RuntimeError("reportlab not available")
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-    styles = getSampleStyleSheet()
-    elems = []
-    elems.append(Paragraph(title, styles["Title"]))
-    elems.append(Spacer(1, 12))
-    total = df["amount"].sum() if "amount" in df.columns else 0.0
-    elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
-    elems.append(Spacer(1, 12))
-    df_export = df.copy()
-    if "timestamp" in df_export.columns:
-        df_export["timestamp"] = df_export["timestamp"].astype(str)
-    cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
-    table_data = [cols]
-    for _, r in df_export.iterrows():
-        table_data.append([str(r.get(c, "")) for c in cols])
-    tbl = Table(table_data, repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2b2b2b")),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
-        ("FONTSIZE", (0,0), (-1,-1), 8),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-    ]))
-    elems.append(tbl)
-    doc.build(elems)
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-    return pdf_bytes
+
+    if TRACING_AVAILABLE and tracer:
+        with tracer.start_as_current_span("generate_pdf_bytes") as span:
+            span.set_attribute("pdf.title", title)
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+            styles = getSampleStyleSheet()
+            elems = []
+            elems.append(Paragraph(title, styles["Title"]))
+            elems.append(Spacer(1, 12))
+            total = df["amount"].sum() if "amount" in df.columns else 0.0
+            elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
+            elems.append(Spacer(1, 12))
+            df_export = df.copy()
+            if "timestamp" in df_export.columns:
+                df_export["timestamp"] = df_export["timestamp"].astype(str)
+            cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
+            table_data = [cols]
+            for _, r in df_export.iterrows():
+                table_data.append([str(r.get(c, "")) for c in cols])
+            tbl = Table(table_data, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2b2b2b")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+                ("FONTSIZE", (0,0), (-1,-1), 8),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ]))
+            elems.append(tbl)
+            doc.build(elems)
+            pdf_bytes = buffer.getvalue()
+            buffer.close()
+            return pdf_bytes
+    else:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+        styles = getSampleStyleSheet()
+        elems = []
+        elems.append(Paragraph(title, styles["Title"]))
+        elems.append(Spacer(1, 12))
+        total = df["amount"].sum() if "amount" in df.columns else 0.0
+        elems.append(Paragraph(f"Total expenses: ₹ {total:.2f} — Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
+        elems.append(Spacer(1, 12))
+        df_export = df.copy()
+        if "timestamp" in df_export.columns:
+            df_export["timestamp"] = df_export["timestamp"].astype(str)
+        cols = [c for c in ["timestamp", "category", "friend", "amount", "notes", "owner"] if c in df_export.columns]
+        table_data = [cols]
+        for _, r in df_export.iterrows():
+            table_data.append([str(r.get(c, "")) for c in cols])
+        tbl = Table(table_data, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#2b2b2b")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+            ("FONTSIZE", (0,0), (-1,-1), 8),
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ]))
+        elems.append(tbl)
+        doc.build(elems)
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return pdf_bytes
 
 def generate_friend_pdf_bytes(friend_name: str) -> bytes:
     if not friend_name:
@@ -572,14 +752,29 @@ def show_app():
             ts = datetime.combine(expense_date, datetime.min.time())
             owner = st.session_state["username"]
             try:
-                collection.insert_one({
-                    "category": category_final,
-                    "friend": friend_final,
-                    "amount": float(amount),
-                    "notes": notes,
-                    "timestamp": ts,
-                    "owner": owner
-                })
+                if TRACING_AVAILABLE and tracer:
+                    with tracer.start_as_current_span("save_expense") as span:
+                        span.set_attribute("expense.owner", owner)
+                        span.set_attribute("expense.category", category_final)
+                        span.set_attribute("expense.amount", float(amount))
+                        collection.insert_one({
+                            "category": category_final,
+                            "friend": friend_final,
+                            "amount": float(amount),
+                            "notes": notes,
+                            "timestamp": ts,
+                            "owner": owner
+                        })
+                else:
+                    collection.insert_one({
+                        "category": category_final,
+                        "friend": friend_final,
+                        "amount": float(amount),
+                        "notes": notes,
+                        "timestamp": ts,
+                        "owner": owner
+                    })
+
                 # extend token TTL when user is active (try both cookie and query)
                 token = read_token_from_query()
                 if token:
@@ -669,12 +864,21 @@ def show_app():
         delall_col1, delall_col2 = st.columns([1,1])
         with delall_col1:
             if st.button("🔥 Delete All Expenses", key="delete_all_btn") and del_all_confirm:
-                result = collection.delete_many({})
-                if result.deleted_count == 0:
-                    st.info("No expense records found to delete.")
+                if TRACING_AVAILABLE and tracer:
+                    with tracer.start_as_current_span("admin_delete_all_expenses") as span:
+                        result = collection.delete_many({})
+                        if result.deleted_count == 0:
+                            st.info("No expense records found to delete.")
+                        else:
+                            log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
+                            st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
                 else:
-                    log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
-                    st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
+                    result = collection.delete_many({})
+                    if result.deleted_count == 0:
+                        st.info("No expense records found to delete.")
+                    else:
+                        log_action("delete_all_expenses", st.session_state["username"], details={"deleted_count": result.deleted_count})
+                        st.warning(f"⚠️ {result.deleted_count} expense(s) deleted.")
 
         with st.expander("View Audit Logs"):
             logs = list(audit_col.find().sort("timestamp", -1).limit(200))
