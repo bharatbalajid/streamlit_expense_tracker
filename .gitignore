@@ -2,3 +2,5 @@
 .devcontainer
 *.sh
 *.pem
+venv
+test.py
